@@ -1,0 +1,16 @@
+{
+  "name": "operator-chat",
+  "version": "1.0.0",
+  "description": "A web UI implementing a chat interface with a ReAct agentic workflow that integrates with a llama.cpp server",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && npm run dev",
+    "dev:frontend": "cd frontend && npm run dev -- --host",
+    "build": "cd frontend && npm run build",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

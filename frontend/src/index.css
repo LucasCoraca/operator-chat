@@ -1,0 +1,196 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    @apply bg-[#141415];
+  }
+
+  body {
+    @apply min-h-screen bg-[#141415] text-zinc-300 font-sans antialiased;
+    background-image:
+      radial-gradient(circle at top, rgba(16, 163, 127, 0.08), transparent 30%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0));
+  }
+
+  ::selection {
+    @apply bg-brand text-white;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Input Glow Effect */
+.input-glow:focus-within {
+  box-shadow: 0 0 15px rgba(16, 163, 127, 0.15);
+  border-color: #3f3f46;
+}
+
+.safe-bottom {
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+
+/* Markdown styling for dark theme */
+.prose {
+  @apply text-zinc-300;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.prose p {
+  @apply my-3 leading-relaxed;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.prose p:first-child {
+  @apply mt-0;
+}
+
+.prose p:last-child {
+  @apply mb-0;
+}
+
+.prose code {
+  @apply bg-surface-200 text-zinc-100 px-1.5 py-0.5 rounded text-sm;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Custom code blocks with copy button - handled by CodeBlock component */
+.prose pre {
+  @apply bg-transparent p-0 m-0;
+}
+
+.prose pre code {
+  @apply bg-transparent text-zinc-300 p-0;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.prose ul {
+  @apply list-disc list-inside my-3;
+}
+
+.prose ol {
+  @apply list-decimal list-inside my-3;
+}
+
+.prose li {
+  @apply my-1;
+}
+
+.prose strong {
+  @apply font-bold text-zinc-100;
+}
+
+.prose em {
+  @apply italic;
+}
+
+.prose blockquote {
+  @apply border-l-4 border-brand pl-4 italic my-3 text-zinc-400;
+}
+
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  @apply font-bold mt-4 mb-2 text-zinc-100;
+}
+
+.prose h1 {
+  @apply text-2xl;
+}
+
+.prose h2 {
+  @apply text-xl;
+}
+
+.prose h3 {
+  @apply text-lg;
+}
+
+.prose h4 {
+  @apply text-base;
+}
+
+.prose a {
+  @apply text-brand hover:text-brand-dark underline;
+}
+
+.prose table {
+  @apply w-full border-collapse my-3 border border-white/10 rounded-xl overflow-hidden;
+}
+
+.prose th {
+  @apply bg-surface-100 border border-white/10 px-4 py-3 text-left font-medium text-zinc-200 text-xs uppercase tracking-wider;
+}
+
+.prose td {
+  @apply border border-white/5 px-4 py-3 text-sm;
+}
+
+.prose hr {
+  @apply border-white/10 my-4;
+}
+
+/* Line clamp utility for search snippets */
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Syntax highlighting for code blocks */
+.code-keyword {
+  @apply text-pink-400;
+}
+
+.code-string {
+  @apply text-green-400;
+}
+
+.code-function {
+  @apply text-blue-400;
+}
+
+.code-class {
+  @apply text-yellow-200;
+}
+
+.code-comment {
+  @apply text-zinc-500;
+}
+
+.code-number {
+  @apply text-purple-400;
+}
+
+/* Word break utilities */
+.word-break {
+  word-break: break-word;
+  overflow-wrap: break-word;
+}

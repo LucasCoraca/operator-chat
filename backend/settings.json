@@ -1,0 +1,21 @@
+{
+  "llama": {
+    "baseUrl": "http://192.168.15.45:9292"
+  },
+  "searxng": {
+    "baseUrl": "http://192.168.15.45:8888",
+    "safeSearch": 1
+  },
+  "ui": {
+    "showStats": false,
+    "selectedPersonality": "professional"
+  },
+  "mcpServers": {
+    "Context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "apiKey": "ctx7sk-44fdbe82-815e-404a-b54b-b2e310929529",
+      "transportType": "streamable-http",
+      "enabled": true
+    }
+  }
+}
