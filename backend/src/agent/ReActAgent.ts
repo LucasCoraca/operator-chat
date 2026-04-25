@@ -484,6 +484,43 @@ export class ReActAgent {
     this.invalidTurnState.count = 0;
   }
 
+  private truncateForPrompt(content: string, maxLength: number): string {
+    if (content.length <= maxLength) {
+      return content;
+    }
+
+    return `${content.slice(0, maxLength)}\n\n[Observation truncated before composing the final answer.]`;
+  }
+
+  private isSyntheticSummaryObservation(content: string): boolean {
+    return content.startsWith('## COMPOSING FINAL ANSWER') ||
+      content.startsWith('## RESEARCH PHASE COMPLETE') ||
+      content.startsWith('## ITERATION LIMIT REACHED');
+  }
+
+  private getComposableObservations(state: AgentState): string[] {
+    const observations: string[] = [];
+    let totalLength = 0;
+    const maxTotalLength = 24000;
+
+    for (const step of state.steps) {
+      if (step.type !== 'observation' || this.isSyntheticSummaryObservation(step.content)) {
+        continue;
+      }
+
+      const observation = this.truncateForPrompt(step.content, 4000);
+      if (totalLength + observation.length > maxTotalLength) {
+        observations.push('[Additional observations were omitted to keep final-answer context bounded.]');
+        break;
+      }
+
+      observations.push(observation);
+      totalLength += observation.length;
+    }
+
+    return observations;
+  }
+
   private replaceLatestCorrection(state: AgentState, content: string): void {
     // Remove any previous "Invalid agent turn" observation to avoid a long chain
     // of corrections, but always ensure the NEW correction is at the very end
@@ -1020,9 +1057,7 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
               this.callbacks.onStepSave?.(chatId, modeStep, [...state.steps]);
               
               // Add summary observation
-              const observations = state.steps
-                .filter(step => step.type === 'observation')
-                .map(step => step.content);
+              const observations = this.getComposableObservations(state);
               
               if (observations.length > 0) {
                 const summaryObservation = `## COMPOSING FINAL ANSWER
@@ -1109,9 +1144,7 @@ Now compose your final answer as normal assistant text.`;
               }
             } else {
               // Already in compose mode, provide fallback answer
-              const observations = state.steps
-                .filter(step => step.type === 'observation')
-                .map(step => step.content);
+              const observations = this.getComposableObservations(state);
               
               state.finalAnswer = 'I was unable to produce a complete answer within the iteration limit. Here is what I found: ' + 
                 (observations.length > 0 ? observations[observations.length - 1].substring(0, 500) : 'No information gathered.');
@@ -1155,9 +1188,7 @@ Now compose your final answer as normal assistant text.`;
           this.callbacks.onStepSave?.(chatId, modeStep, [...state.steps]);
           
           // Add observation summarizing all gathered information for compose_reply_mode
-          const observations = state.steps
-            .filter(step => step.type === 'observation')
-            .map(step => step.content);
+          const observations = this.getComposableObservations(state);
           
           if (observations.length > 0) {
             const summaryObservation = `## RESEARCH PHASE COMPLETE - COMPOSING FINAL ANSWER
@@ -1334,9 +1365,7 @@ Now compose your final answer using all the information above as normal assistan
           this.callbacks.onStepSave?.(chatId, modeStep, [...state.steps]);
           
           // Add summary observation of all gathered information
-          const observations = state.steps
-            .filter(step => step.type === 'observation')
-            .map(step => step.content);
+          const observations = this.getComposableObservations(state);
           
           if (observations.length > 0) {
             const summaryObservation = `## ITERATION LIMIT REACHED - COMPOSING FINAL ANSWER
@@ -1433,6 +1462,8 @@ Now compose your final answer using all the information above as normal assistan
           state.steps.push(finalStep);
           this.callbacks.onStep(finalStep);
           this.callbacks.onStepSave?.(chatId, finalStep, [...state.steps]);
+          state.isComplete = true;
+          await this.emitFinalAnswerChunks([state.finalAnswer]);
         }
       }
     } catch (error) {

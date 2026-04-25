@@ -75,6 +75,9 @@ export declare class ReActAgent {
     private extractInvalidToolName;
     private recordInvalidTurn;
     private resetInvalidTurnState;
+    private truncateForPrompt;
+    private isSyntheticSummaryObservation;
+    private getComposableObservations;
     private replaceLatestCorrection;
     private buildCorrectionMessage;
     private emitFinalAnswerChunks;

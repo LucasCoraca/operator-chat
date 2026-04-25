@@ -161,6 +161,47 @@ function normalizeToolPreferences(preferences) {
 }
 const chatSessions = new Map();
 const pendingApprovals = new Map();
+const MAX_PERSISTED_STEP_CONTENT_CHARS = 20000;
+const MAX_PERSISTED_PARTIAL_ANSWER_CHARS = 100000;
+function truncateForPersistence(content, maxLength) {
+    if (content === undefined || content.length <= maxLength) {
+        return content;
+    }
+    return `${content.slice(0, maxLength)}\n\n[Truncated while saving to avoid oversized database packets.]`;
+}
+function parseJsonIfNeeded(value) {
+    if (typeof value !== 'string') {
+        return value;
+    }
+    try {
+        return JSON.parse(value);
+    }
+    catch {
+        return undefined;
+    }
+}
+function sanitizeAgentStepsForPersistence(steps) {
+    const parsedSteps = parseJsonIfNeeded(steps);
+    if (!Array.isArray(parsedSteps)) {
+        return [];
+    }
+    return parsedSteps.map((step) => ({
+        ...step,
+        content: truncateForPersistence(typeof step.content === 'string' ? step.content : '', MAX_PERSISTED_STEP_CONTENT_CHARS) ?? '',
+    }));
+}
+function sanitizeAgentStateForPersistence(agentState) {
+    const parsedAgentState = parseJsonIfNeeded(agentState);
+    if (!parsedAgentState || typeof parsedAgentState !== 'object') {
+        return undefined;
+    }
+    return {
+        ...parsedAgentState,
+        steps: sanitizeAgentStepsForPersistence(parsedAgentState.steps),
+        finalAnswer: truncateForPersistence(typeof parsedAgentState.finalAnswer === 'string' ? parsedAgentState.finalAnswer : undefined, MAX_PERSISTED_PARTIAL_ANSWER_CHARS) ?? null,
+        partialFinalAnswer: truncateForPersistence(typeof parsedAgentState.partialFinalAnswer === 'string' ? parsedAgentState.partialFinalAnswer : undefined, MAX_PERSISTED_PARTIAL_ANSWER_CHARS),
+    };
+}
 function normalizeChatMessages(messages, agentState, fallbackModel) {
     const normalizedMessages = (messages ?? []).map((message) => {
         if (message.id) {
@@ -229,12 +270,12 @@ async function loadChats() {
                         role: msg.role,
                         content: msg.content,
                         model: msg.model || undefined,
-                        agentSteps: msg.agent_steps || [],
+                        agentSteps: sanitizeAgentStepsForPersistence(msg.agent_steps),
                     })),
                     name: persistedChat.name,
                     createdAt: persistedChat.created_at.toISOString(),
                     updatedAt: persistedChat.updated_at.toISOString(),
-                    agentState: persistedChat.agent_state,
+                    agentState: sanitizeAgentStateForPersistence(persistedChat.agent_state),
                     toolPreferences: persistedChat.tool_preferences || {},
                     approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
                 };
@@ -258,7 +299,7 @@ async function saveChat(session) {
         if (existingChat) {
             await repositories_1.chatRepository.update(session.id, {
                 name: session.name,
-                agent_state: session.agentState,
+                agent_state: sanitizeAgentStateForPersistence(session.agentState),
                 tool_preferences: session.toolPreferences,
                 approval_mode: session.approvalMode,
             });
@@ -289,7 +330,7 @@ async function saveChat(session) {
             if (existingMessageIds.has(msg.id)) {
                 await repositories_1.chatRepository.updateMessage(msg.id, {
                     content: msg.content,
-                    agent_steps: msg.agentSteps,
+                    agent_steps: sanitizeAgentStepsForPersistence(msg.agentSteps),
                 });
             }
             else {
@@ -299,7 +340,7 @@ async function saveChat(session) {
                     role: msg.role,
                     content: msg.content,
                     model: msg.model,
-                    agentSteps: msg.agentSteps,
+                    agentSteps: sanitizeAgentStepsForPersistence(msg.agentSteps),
                     messageIndex: i,
                 });
             }
@@ -483,14 +524,14 @@ async function executeScheduledTask(task, force = false) {
                     break;
                 }
             }
-            await repositories_1.taskRepository.updateRun(run.id, { agent_steps: allSteps });
-            saveChats();
+            await repositories_1.taskRepository.updateRun(run.id, { agent_steps: sanitizeAgentStepsForPersistence(allSteps) });
+            void saveChat(session).catch(console.error);
             io.to(session.id).emit('step-saved', { step, allSteps });
         },
         onPartialFinalAnswer: (_chatId, partialContent) => {
             if (session.agentState) {
                 session.agentState = { ...session.agentState, partialFinalAnswer: partialContent };
-                saveChats();
+                void saveChat(session).catch(console.error);
             }
         },
     }, selectedPersonality, 'en', responseModel);
@@ -536,7 +577,7 @@ async function executeScheduledTask(task, force = false) {
             status: approvalBlocked ? 'needs_approval' : 'completed',
             completed_at: completedAt,
             result_message_id: resultMessageId,
-            agent_steps: result.steps,
+            agent_steps: sanitizeAgentStepsForPersistence(result.steps),
         });
         io.to(session.id).emit('agent-complete', { finalAnswer: result.finalAnswer });
         io.to(task.user_id).emit('task-run-completed', { taskId: task.id, runId: run.id, chatId: session.id });
@@ -1221,8 +1262,7 @@ io.on('connection', (socket) => {
                             break;
                         }
                     }
-                    // Save to disk immediately
-                    saveChats();
+                    void saveChat(session).catch(console.error);
                 }
                 // Emit step data to frontend for real-time updates
                 io.to(savedChatId).emit('step-saved', {
@@ -1261,8 +1301,7 @@ io.on('connection', (socket) => {
                             break;
                         }
                     }
-                    // Save to disk to persist partial content
-                    saveChats();
+                    void saveChat(session).catch(console.error);
                 }
             },
         }, selectedPersonality, language, responseModel);

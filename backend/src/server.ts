@@ -245,6 +245,61 @@ interface PendingApproval {
 const pendingApprovals = new Map<string, PendingApproval>();
 type ToolApprovalRequestPayload = ToolApprovalRequest & { chatId: string };
 
+const MAX_PERSISTED_STEP_CONTENT_CHARS = 20000;
+const MAX_PERSISTED_PARTIAL_ANSWER_CHARS = 100000;
+
+function truncateForPersistence(content: string | undefined, maxLength: number): string | undefined {
+  if (content === undefined || content.length <= maxLength) {
+    return content;
+  }
+
+  return `${content.slice(0, maxLength)}\n\n[Truncated while saving to avoid oversized database packets.]`;
+}
+
+function parseJsonIfNeeded(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeAgentStepsForPersistence(steps: unknown): AgentStep[] {
+  const parsedSteps = parseJsonIfNeeded(steps);
+  if (!Array.isArray(parsedSteps)) {
+    return [];
+  }
+
+  return parsedSteps.map((step) => ({
+    ...step,
+    content: truncateForPersistence(typeof step.content === 'string' ? step.content : '', MAX_PERSISTED_STEP_CONTENT_CHARS) ?? '',
+  }));
+}
+
+function sanitizeAgentStateForPersistence(agentState: unknown): ChatSession['agentState'] {
+  const parsedAgentState = parseJsonIfNeeded(agentState) as ChatSession['agentState'];
+  if (!parsedAgentState || typeof parsedAgentState !== 'object') {
+    return undefined;
+  }
+
+  return {
+    ...parsedAgentState,
+    steps: sanitizeAgentStepsForPersistence(parsedAgentState.steps),
+    finalAnswer: truncateForPersistence(
+      typeof parsedAgentState.finalAnswer === 'string' ? parsedAgentState.finalAnswer : undefined,
+      MAX_PERSISTED_PARTIAL_ANSWER_CHARS
+    ) ?? null,
+    partialFinalAnswer: truncateForPersistence(
+      typeof parsedAgentState.partialFinalAnswer === 'string' ? parsedAgentState.partialFinalAnswer : undefined,
+      MAX_PERSISTED_PARTIAL_ANSWER_CHARS
+    ),
+  };
+}
+
 function normalizeChatMessages(
   messages: ChatMessage[] | undefined,
   agentState?: ChatSession['agentState'],
@@ -334,12 +389,12 @@ async function loadChats(): Promise<void> {
             role: msg.role,
             content: msg.content,
             model: msg.model || undefined,
-            agentSteps: msg.agent_steps || [],
+            agentSteps: sanitizeAgentStepsForPersistence(msg.agent_steps),
           })),
           name: persistedChat.name,
           createdAt: persistedChat.created_at.toISOString(),
           updatedAt: persistedChat.updated_at.toISOString(),
-          agentState: persistedChat.agent_state,
+          agentState: sanitizeAgentStateForPersistence(persistedChat.agent_state),
           toolPreferences: persistedChat.tool_preferences || {},
           approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
         };
@@ -363,7 +418,7 @@ async function saveChat(session: ChatSession): Promise<void> {
     if (existingChat) {
       await chatRepository.update(session.id, {
         name: session.name,
-        agent_state: session.agentState,
+        agent_state: sanitizeAgentStateForPersistence(session.agentState),
         tool_preferences: session.toolPreferences,
         approval_mode: session.approvalMode,
       });
@@ -396,7 +451,7 @@ async function saveChat(session: ChatSession): Promise<void> {
       if (existingMessageIds.has(msg.id)) {
         await chatRepository.updateMessage(msg.id, {
           content: msg.content,
-          agent_steps: msg.agentSteps,
+          agent_steps: sanitizeAgentStepsForPersistence(msg.agentSteps),
         });
       } else {
         await chatRepository.addMessage({
@@ -405,7 +460,7 @@ async function saveChat(session: ChatSession): Promise<void> {
           role: msg.role,
           content: msg.content,
           model: msg.model,
-          agentSteps: msg.agentSteps,
+          agentSteps: sanitizeAgentStepsForPersistence(msg.agentSteps),
           messageIndex: i,
         });
       }
@@ -605,14 +660,14 @@ async function executeScheduledTask(task: ScheduledTask, force = false): Promise
           break;
         }
       }
-      await taskRepository.updateRun(run.id, { agent_steps: allSteps } as any);
-      saveChats();
+      await taskRepository.updateRun(run.id, { agent_steps: sanitizeAgentStepsForPersistence(allSteps) } as any);
+      void saveChat(session!).catch(console.error);
       io.to(session!.id).emit('step-saved', { step, allSteps });
     },
     onPartialFinalAnswer: (_chatId: string, partialContent: string) => {
       if (session!.agentState) {
         session!.agentState = { ...session!.agentState, partialFinalAnswer: partialContent };
-        saveChats();
+        void saveChat(session!).catch(console.error);
       }
     },
   }, selectedPersonality, 'en', responseModel);
@@ -675,7 +730,7 @@ async function executeScheduledTask(task: ScheduledTask, force = false): Promise
       status: approvalBlocked ? 'needs_approval' : 'completed',
       completed_at: completedAt,
       result_message_id: resultMessageId,
-      agent_steps: result.steps,
+      agent_steps: sanitizeAgentStepsForPersistence(result.steps),
     } as any);
 
     io.to(session.id).emit('agent-complete', { finalAnswer: result.finalAnswer });
@@ -1501,8 +1556,7 @@ io.on('connection', (socket) => {
             }
           }
           
-          // Save to disk immediately
-          saveChats();
+          void saveChat(session).catch(console.error);
         }
         
         // Emit step data to frontend for real-time updates
@@ -1544,8 +1598,7 @@ io.on('connection', (socket) => {
             }
           }
           
-          // Save to disk to persist partial content
-          saveChats();
+          void saveChat(session).catch(console.error);
         }
       },
     }, selectedPersonality, language, responseModel);
