@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ToolRegistry = void 0;
 const browserClient_1 = require("../services/browserClient");
+const taskRepository_1 = require("../repositories/taskRepository");
+const schedule_1 = require("../services/schedule");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
 const browserClient = new browserClient_1.BrowserClient();
@@ -393,6 +395,75 @@ class ToolRegistry {
                 }
             },
         });
+        // Schedule Task Tool
+        this.tools.set('schedule_task', {
+            name: 'schedule_task',
+            description: 'Create a scheduled AI task for the current user. Use this when the user asks you to do something later or repeatedly, such as "tomorrow at 9", "every weekday", "daily", "weekly", or "every 30 minutes". The task will run the provided prompt in the background and write the result to the attached chat.',
+            parameters: {
+                title: { type: 'string', description: 'Short human-readable task title' },
+                prompt: { type: 'string', description: 'The full instruction the AI should execute when the task runs' },
+                scheduleType: { type: 'string', description: 'One of: once, daily, weekdays, weekly, interval' },
+                runAt: { type: 'string', description: 'ISO date/time for one-time tasks. Required only when scheduleType is once.', required: false },
+                intervalMinutes: { type: 'number', description: 'Number of minutes between runs. Required only when scheduleType is interval.', required: false },
+                daysOfWeek: { type: 'string', description: 'Comma-separated day numbers for weekly tasks, where 0=Sunday and 6=Saturday. Example: "1,3,5". Required only when scheduleType is weekly.', required: false },
+                timeOfDay: { type: 'string', description: 'Local HH:MM time for daily, weekdays, or weekly schedules. Example: "09:00".', required: false },
+                timezone: { type: 'string', description: 'IANA timezone name. Use UTC if unknown.', required: false },
+            },
+            policy: {
+                requiresApproval: true,
+                supportsAutoApprove: false,
+                capabilities: ['schedule', 'write_chat'],
+                sandboxPolicy: 'none',
+                riskLevel: 'medium',
+            },
+            execute: async (args, context) => {
+                const title = String(args.title || '').trim();
+                const prompt = String(args.prompt || '').trim();
+                const scheduleType = String(args.scheduleType || '').trim();
+                const timezone = String(args.timezone || 'UTC').trim() || 'UTC';
+                if (!title || !prompt) {
+                    return 'Error: title and prompt are required to schedule a task.';
+                }
+                if (!['once', 'daily', 'weekdays', 'weekly', 'interval'].includes(scheduleType)) {
+                    return 'Error: scheduleType must be one of once, daily, weekdays, weekly, or interval.';
+                }
+                const rawDaysOfWeek = typeof args.daysOfWeek === 'string'
+                    ? args.daysOfWeek.split(',').map((value) => value.trim())
+                    : args.daysOfWeek;
+                const daysOfWeek = (0, schedule_1.normalizeDaysOfWeek)(rawDaysOfWeek);
+                const intervalMinutes = args.intervalMinutes !== undefined ? Number(args.intervalMinutes) : null;
+                const runAt = args.runAt ? String(args.runAt) : null;
+                const timeOfDay = args.timeOfDay ? String(args.timeOfDay) : null;
+                const nextRunAt = (0, schedule_1.computeNextRun)({
+                    scheduleType,
+                    runAt,
+                    intervalMinutes,
+                    daysOfWeek,
+                    timeOfDay,
+                });
+                if (!nextRunAt) {
+                    return 'Error: The schedule does not produce a future run time. For one-time tasks, provide a future ISO runAt value.';
+                }
+                const task = await taskRepository_1.taskRepository.create({
+                    userId: context.userId,
+                    chatId: context.chatId || null,
+                    sandboxId: context.sandboxId || null,
+                    title,
+                    prompt,
+                    scheduleType,
+                    runAt: runAt ? new Date(runAt) : null,
+                    intervalMinutes,
+                    daysOfWeek,
+                    timeOfDay,
+                    timezone,
+                    model: context.model || null,
+                    approvalMode: { alwaysApprove: false },
+                    reasoningEffort: 'medium',
+                    nextRunAt,
+                });
+                return `Scheduled task created successfully.\nID: ${task.id}\nTitle: ${task.title}\nNext run: ${nextRunAt.toISOString()}\nSchedule type: ${task.schedule_type}`;
+            },
+        });
     }
     // Public method to re-register MCP tools (called when servers connect/disconnect)
     registerMCPTools() {
@@ -556,7 +627,9 @@ class ToolRegistry {
                         };
                         return acc;
                     }, {}),
-                    required: Object.keys(tool.parameters),
+                    required: Object.entries(tool.parameters)
+                        .filter(([, value]) => value.required !== false)
+                        .map(([key]) => key),
                 },
             },
         }));
@@ -576,7 +649,9 @@ class ToolRegistry {
                         };
                         return acc;
                     }, {}),
-                    required: Object.keys(tool.parameters),
+                    required: Object.entries(tool.parameters)
+                        .filter(([, value]) => value.required !== false)
+                        .map(([key]) => key),
                 },
             },
         }));

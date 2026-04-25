@@ -1262,7 +1262,7 @@ Now compose your final answer using all the information above as normal assistan
           const observation = await this.toolRegistry.executeTool(
             parsedResponse.toolName,
             parsedResponse.toolArgs,
-            { sandboxId, userId },
+            { sandboxId, userId, chatId, model: this.model },
             this.getEnabledToolNames(toolPreferences)
           );
           this.logDebug(`\nEXECUTING TOOL: ${parsedResponse.toolName}`);

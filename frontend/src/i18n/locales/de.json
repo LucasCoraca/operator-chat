@@ -176,5 +176,76 @@
     "goUp": "Übergeordnetes Verzeichnis",
     "save": "Speichern",
     "edit": "Bearbeiten"
+  },
+  "scheduler": {
+    "title": "Geplante Aufgaben",
+    "automation": "Automatisierung",
+    "description": "Erstellen Sie wiederkehrende KI-Arbeiten, prüfen Sie kommende Läufe und öffnen Sie den von jeder Aufgabe erzeugten Chatverlauf.",
+    "newTask": "Neue Aufgabe",
+    "tasks": "Aufgaben",
+    "notScheduled": "Nicht geplant",
+    "nextRun": "Nächster Lauf",
+    "cadence": "Rhythmus",
+    "lastRun": "Letzter Lauf",
+    "model": "Modell",
+    "defaultModel": "Standard",
+    "runNow": "Jetzt ausführen",
+    "resume": "Fortsetzen",
+    "pause": "Pausieren",
+    "openChat": "Chat öffnen",
+    "noTasksHere": "Keine Aufgaben hier.",
+    "failedToCreate": "Aufgabe konnte nicht erstellt werden",
+    "createTask": "Aufgabe erstellen",
+    "loadingTasks": "Aufgaben werden geladen...",
+    "status": {
+      "active": "Aktiv",
+      "paused": "Pausiert",
+      "completed": "Abgeschlossen",
+      "failed": "Fehlgeschlagen",
+      "cancelled": "Abgebrochen"
+    },
+    "scheduleTypes": {
+      "once": "Einmal",
+      "daily": "Täglich",
+      "weekdays": "Wochentags",
+      "weekly": "Wöchentlich",
+      "interval": "Intervall"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "Einmal um {{time}}",
+      "dailyAt": "Täglich um {{time}}",
+      "weekdaysAt": "Wochentags um {{time}}",
+      "weeklyAt": "{{days}} um {{time}}",
+      "everyMinutes": "Alle {{count}} Min"
+    },
+    "days": {
+      "sun": "So",
+      "mon": "Mo",
+      "tue": "Di",
+      "wed": "Mi",
+      "thu": "Do",
+      "fri": "Fr",
+      "sat": "Sa"
+    },
+    "sections": {
+      "attention": "Benötigt Aufmerksamkeit",
+      "attentionDescription": "Pausierte oder fehlgeschlagene Automatisierungen, die eine Entscheidung benötigen.",
+      "active": "Aktiv",
+      "activeDescription": "Kommende geplante Läufe nach Ausführungszeit sortiert.",
+      "history": "Verlauf",
+      "historyDescription": "Abgeschlossene einmalige Aufgaben und abgebrochene Automatisierungen."
+    },
+    "form": {
+      "title": "Titel",
+      "titlePlaceholder": "Tägliches Recherche-Briefing",
+      "schedule": "Zeitplan",
+      "instruction": "Anweisung",
+      "instructionPlaceholder": "Sagen Sie der KI genau, was sie beim Lauf tun soll.",
+      "runAt": "Ausführen um",
+      "everyMinutes": "Alle N Minuten",
+      "time": "Uhrzeit",
+      "days": "Tage",
+      "attachToCurrentChat": "Läufe an aktuellen Chat anhängen"
+    }
   }
 }

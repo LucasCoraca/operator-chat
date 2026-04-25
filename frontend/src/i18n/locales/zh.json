@@ -176,5 +176,76 @@
     "goUp": "上一级目录",
     "save": "保存",
     "edit": "编辑"
+  },
+  "scheduler": {
+    "title": "计划任务",
+    "automation": "自动化",
+    "description": "创建周期性 AI 工作，查看即将运行的任务，并打开每个任务生成的聊天历史。",
+    "newTask": "新任务",
+    "tasks": "任务",
+    "notScheduled": "未计划",
+    "nextRun": "下次运行",
+    "cadence": "频率",
+    "lastRun": "上次运行",
+    "model": "模型",
+    "defaultModel": "默认",
+    "runNow": "立即运行",
+    "resume": "恢复",
+    "pause": "暂停",
+    "openChat": "打开聊天",
+    "noTasksHere": "这里没有任务。",
+    "failedToCreate": "创建任务失败",
+    "createTask": "创建任务",
+    "loadingTasks": "正在加载任务...",
+    "status": {
+      "active": "活动",
+      "paused": "已暂停",
+      "completed": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "scheduleTypes": {
+      "once": "一次",
+      "daily": "每天",
+      "weekdays": "工作日",
+      "weekly": "每周",
+      "interval": "间隔"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "在 {{time}} 运行一次",
+      "dailyAt": "每天 {{time}}",
+      "weekdaysAt": "工作日 {{time}}",
+      "weeklyAt": "{{days}} {{time}}",
+      "everyMinutes": "每 {{count}} 分钟"
+    },
+    "days": {
+      "sun": "周日",
+      "mon": "周一",
+      "tue": "周二",
+      "wed": "周三",
+      "thu": "周四",
+      "fri": "周五",
+      "sat": "周六"
+    },
+    "sections": {
+      "attention": "需要注意",
+      "attentionDescription": "需要处理的已暂停或失败的自动化。",
+      "active": "活动",
+      "activeDescription": "按下次执行时间排序的计划运行。",
+      "history": "历史",
+      "historyDescription": "已完成的一次性任务和已取消的自动化。"
+    },
+    "form": {
+      "title": "标题",
+      "titlePlaceholder": "每日研究简报",
+      "schedule": "计划",
+      "instruction": "指令",
+      "instructionPlaceholder": "准确告诉 AI 运行时要做什么。",
+      "runAt": "运行时间",
+      "everyMinutes": "每 N 分钟",
+      "time": "时间",
+      "days": "日期",
+      "attachToCurrentChat": "将运行附加到当前聊天"
+    }
   }
 }

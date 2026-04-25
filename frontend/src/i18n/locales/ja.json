@@ -176,5 +176,76 @@
     "goUp": "上のディレクトリへ",
     "save": "保存",
     "edit": "編集"
+  },
+  "scheduler": {
+    "title": "スケジュール済みタスク",
+    "automation": "自動化",
+    "description": "定期的なAI作業を作成し、今後の実行を確認し、各タスクが生成したチャット履歴を開きます。",
+    "newTask": "新しいタスク",
+    "tasks": "タスク",
+    "notScheduled": "未スケジュール",
+    "nextRun": "次回実行",
+    "cadence": "頻度",
+    "lastRun": "前回実行",
+    "model": "モデル",
+    "defaultModel": "デフォルト",
+    "runNow": "今すぐ実行",
+    "resume": "再開",
+    "pause": "一時停止",
+    "openChat": "チャットを開く",
+    "noTasksHere": "ここにタスクはありません。",
+    "failedToCreate": "タスクの作成に失敗しました",
+    "createTask": "タスクを作成",
+    "loadingTasks": "タスクを読み込み中...",
+    "status": {
+      "active": "有効",
+      "paused": "一時停止",
+      "completed": "完了",
+      "failed": "失敗",
+      "cancelled": "キャンセル済み"
+    },
+    "scheduleTypes": {
+      "once": "一度",
+      "daily": "毎日",
+      "weekdays": "平日",
+      "weekly": "毎週",
+      "interval": "間隔"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "{{time}} に一度",
+      "dailyAt": "毎日 {{time}}",
+      "weekdaysAt": "平日 {{time}}",
+      "weeklyAt": "{{days}} {{time}}",
+      "everyMinutes": "{{count}} 分ごと"
+    },
+    "days": {
+      "sun": "日",
+      "mon": "月",
+      "tue": "火",
+      "wed": "水",
+      "thu": "木",
+      "fri": "金",
+      "sat": "土"
+    },
+    "sections": {
+      "attention": "要確認",
+      "attentionDescription": "判断が必要な一時停止中または失敗した自動化。",
+      "active": "有効",
+      "activeDescription": "次回実行時刻順のスケジュール済み実行。",
+      "history": "履歴",
+      "historyDescription": "完了した単発タスクとキャンセルされた自動化。"
+    },
+    "form": {
+      "title": "タイトル",
+      "titlePlaceholder": "毎日のリサーチ概要",
+      "schedule": "スケジュール",
+      "instruction": "指示",
+      "instructionPlaceholder": "実行時にAIが行う内容を正確に入力してください。",
+      "runAt": "実行日時",
+      "everyMinutes": "N分ごと",
+      "time": "時刻",
+      "days": "曜日",
+      "attachToCurrentChat": "実行を現在のチャットに添付"
+    }
   }
 }

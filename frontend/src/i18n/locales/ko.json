@@ -176,5 +176,76 @@
     "goUp": "상위 디렉토리",
     "save": "저장",
     "edit": "편집"
+  },
+  "scheduler": {
+    "title": "예약된 작업",
+    "automation": "자동화",
+    "description": "반복 AI 작업을 만들고 예정된 실행을 확인하며 각 작업이 만든 채팅 기록을 엽니다.",
+    "newTask": "새 작업",
+    "tasks": "작업",
+    "notScheduled": "예약되지 않음",
+    "nextRun": "다음 실행",
+    "cadence": "주기",
+    "lastRun": "마지막 실행",
+    "model": "모델",
+    "defaultModel": "기본값",
+    "runNow": "지금 실행",
+    "resume": "재개",
+    "pause": "일시 중지",
+    "openChat": "채팅 열기",
+    "noTasksHere": "여기에 작업이 없습니다.",
+    "failedToCreate": "작업 생성 실패",
+    "createTask": "작업 생성",
+    "loadingTasks": "작업 로드 중...",
+    "status": {
+      "active": "활성",
+      "paused": "일시 중지됨",
+      "completed": "완료됨",
+      "failed": "실패",
+      "cancelled": "취소됨"
+    },
+    "scheduleTypes": {
+      "once": "한 번",
+      "daily": "매일",
+      "weekdays": "평일",
+      "weekly": "매주",
+      "interval": "간격"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "{{time}}에 한 번",
+      "dailyAt": "매일 {{time}}",
+      "weekdaysAt": "평일 {{time}}",
+      "weeklyAt": "{{days}} {{time}}",
+      "everyMinutes": "{{count}}분마다"
+    },
+    "days": {
+      "sun": "일",
+      "mon": "월",
+      "tue": "화",
+      "wed": "수",
+      "thu": "목",
+      "fri": "금",
+      "sat": "토"
+    },
+    "sections": {
+      "attention": "주의 필요",
+      "attentionDescription": "결정이 필요한 일시 중지 또는 실패한 자동화입니다.",
+      "active": "활성",
+      "activeDescription": "다음 실행 시간순으로 정렬된 예정 실행입니다.",
+      "history": "기록",
+      "historyDescription": "완료된 일회성 작업과 취소된 자동화입니다."
+    },
+    "form": {
+      "title": "제목",
+      "titlePlaceholder": "일일 리서치 브리핑",
+      "schedule": "일정",
+      "instruction": "지시",
+      "instructionPlaceholder": "실행 시 AI가 정확히 무엇을 해야 하는지 입력하세요.",
+      "runAt": "실행 시간",
+      "everyMinutes": "N분마다",
+      "time": "시간",
+      "days": "요일",
+      "attachToCurrentChat": "실행을 현재 채팅에 첨부"
+    }
   }
 }

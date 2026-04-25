@@ -5,6 +5,7 @@ import { BrowserRouter, Routes, Route, useParams, useNavigate } from 'react-rout
 import ChatInterface from './components/ChatInterface';
 import SettingsPanel from './components/SettingsPanel';
 import SandboxExplorer from './components/SandboxExplorer';
+import ScheduledTaskManager from './components/ScheduledTaskManager';
 import { PersonalityManager } from './components/PersonalityManager';
 import { MemoryManagerModal } from './components/MemoryManagerModal';
 import { AuthProvider, useAuth } from './components/AuthContext';
@@ -198,6 +199,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [customPersonalities, setCustomPersonalities] = useState<ChatPersonality[]>([]);
   const [showPersonalityManager, setShowPersonalityManager] = useState(false);
   const [showMemoryManager, setShowMemoryManager] = useState(false);
+  const [showTasks, setShowTasks] = useState(false);
   const landingFileInputRef = useRef<HTMLInputElement>(null);
   const landingToolPickerRef = useRef<HTMLDivElement>(null);
 
@@ -798,7 +800,19 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const handleNewChat = () => {
     setCurrentChatId(null);
     setCurrentSandboxId(null);
+    setShowTasks(false);
     navigate('/');
+    setShowMobileSidebar(false);
+  };
+
+  const openTasks = () => {
+    setShowTasks(true);
+    setShowMobileSidebar(false);
+  };
+
+  const openChatFromTask = (chatId: string) => {
+    setShowTasks(false);
+    navigate(`/chat/${chatId}`);
     setShowMobileSidebar(false);
   };
 
@@ -815,6 +829,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
               chat={chat}
               isActive={currentChatId === chat.id}
               onSelect={() => {
+                setShowTasks(false);
                 navigate(`/chat/${chat.id}`);
                 setShowMobileSidebar(false);
               }}
@@ -886,6 +901,19 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             </svg>
             <span className="font-medium text-sm">{t('sidebar.newChat')}</span>
           </button>
+          <button
+            onClick={openTasks}
+            className={`mt-2 w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all ${
+              showTasks
+                ? 'border-brand/40 bg-brand/15 text-brand'
+                : 'border-white/10 bg-transparent text-zinc-400 hover:bg-surface-100 hover:text-zinc-100'
+            }`}
+          >
+            <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3M4 11h16M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z" />
+            </svg>
+            <span className="font-medium">{t('scheduler.tasks')}</span>
+          </button>
         </div>
 
         <div className="px-3 pb-3">
@@ -915,6 +943,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   <button
                     key={result.chatId}
                     onClick={() => {
+                      setShowTasks(false);
                       navigate(`/chat/${result.chatId}?msg=${result.matchingMessages[0]?.messageIndex ?? 0}`);
                       setShowMobileSidebar(false);
                     }}
@@ -978,6 +1007,19 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             </svg>
             <span className="font-medium text-sm">{t('sidebar.newChat')}</span>
           </button>
+          <button
+            onClick={openTasks}
+            className={`mt-2 w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all ${
+              showTasks
+                ? 'border-brand/40 bg-brand/15 text-brand'
+                : 'border-white/10 bg-transparent text-zinc-400 hover:bg-surface-100 hover:text-zinc-100'
+            }`}
+          >
+            <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3M4 11h16M5 5h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z" />
+            </svg>
+            <span className="font-medium">{t('scheduler.tasks')}</span>
+          </button>
         </div>
 
         <div className="px-3 pb-3">
@@ -1007,6 +1049,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   <button
                     key={result.chatId}
                     onClick={() => {
+                      setShowTasks(false);
                       navigate(`/chat/${result.chatId}?msg=${result.matchingMessages[0]?.messageIndex ?? 0}`);
                       setShowMobileSidebar(false);
                     }}
@@ -1075,7 +1118,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-zinc-100">
-                      {currentChat?.name ?? 'Operator Chat'}
+                      {showTasks ? t('scheduler.title') : currentChat?.name ?? 'Operator Chat'}
                     </div>
                     <div className="truncate text-[11px] uppercase tracking-[0.18em] text-zinc-500">
                       {currentModel || 'No model'}
@@ -1179,7 +1222,14 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
         </header>
 
         {/* Chat Content */}
-        {currentChatId && currentSandboxId ? (
+        {showTasks ? (
+          <ScheduledTaskManager
+            socket={socket}
+            currentChatId={currentChatId}
+            currentModel={currentModel}
+            onOpenChat={openChatFromTask}
+          />
+        ) : currentChatId && currentSandboxId ? (
           <div className="flex min-h-0 flex-1 flex-col md:flex-row">
             <div className="flex min-h-0 flex-1 flex-col">
               <ChatInterface 

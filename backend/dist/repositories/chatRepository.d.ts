@@ -28,6 +28,7 @@ export interface CreateChatInput {
     approvalMode?: any;
 }
 export interface CreateMessageInput {
+    id?: string;
     chatId: string;
     role: 'user' | 'assistant';
     content: string;

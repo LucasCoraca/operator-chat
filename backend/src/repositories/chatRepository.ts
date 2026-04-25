@@ -39,6 +39,7 @@ export interface CreateChatInput {
 }
 
 export interface CreateMessageInput {
+  id?: string;
   chatId: string;
   role: 'user' | 'assistant';
   content: string;
@@ -156,7 +157,7 @@ export class ChatRepository {
   }
 
   async addMessage(input: CreateMessageInput): Promise<ChatMessage> {
-    const id = crypto.randomUUID();
+    const id = input.id || crypto.randomUUID();
     await execute(
       `INSERT INTO chat_messages (id, chat_id, role, content, model, agent_steps, message_index)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,

@@ -2,7 +2,7 @@ import { SearXNGClient } from '../services/searxngClient';
 import { SandboxManager } from '../services/sandboxManager';
 import { MemoryManager } from '../services/memoryManager';
 import { MCPClientManager } from '../services/mcpClientManager';
-export type ToolCapability = 'filesystem' | 'network' | 'process' | 'browser' | 'read_chat' | 'write_chat' | 'memory';
+export type ToolCapability = 'filesystem' | 'network' | 'process' | 'browser' | 'read_chat' | 'write_chat' | 'memory' | 'schedule';
 export type ToolSandboxPolicy = 'none' | 'chat_fs_only' | 'isolated_process' | 'browser_isolated';
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
 export interface ToolExecutionPolicy {
@@ -22,11 +22,14 @@ export interface Tool {
     parameters: Record<string, {
         type: string;
         description: string;
+        required?: boolean;
     }>;
     policy: ToolExecutionPolicy;
     execute: (args: Record<string, any>, context: {
         sandboxId: string;
         userId: string;
+        chatId?: string;
+        model?: string;
     }) => Promise<string>;
 }
 export declare class ToolRegistry {
@@ -47,6 +50,8 @@ export declare class ToolRegistry {
     executeTool(name: string, args: Record<string, any>, context: {
         sandboxId: string;
         userId: string;
+        chatId?: string;
+        model?: string;
     }, enabledToolNames?: string[]): Promise<string>;
     getToolDescriptions(enabledToolNames?: string[]): string;
     getToolDefinitions(): Array<{

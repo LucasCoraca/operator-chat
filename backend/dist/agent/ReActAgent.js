@@ -989,7 +989,7 @@ Now compose your final answer using all the information above as normal assistan
                             continue;
                         }
                     }
-                    const observation = await this.toolRegistry.executeTool(parsedResponse.toolName, parsedResponse.toolArgs, { sandboxId, userId }, this.getEnabledToolNames(toolPreferences));
+                    const observation = await this.toolRegistry.executeTool(parsedResponse.toolName, parsedResponse.toolArgs, { sandboxId, userId, chatId, model: this.model }, this.getEnabledToolNames(toolPreferences));
                     this.logDebug(`\nEXECUTING TOOL: ${parsedResponse.toolName}`);
                     this.logDebug(`Tool observation (${observation.length} chars): ${observation.substring(0, 300)}...`);
                     const obsStep = {

@@ -176,5 +176,76 @@
     "goUp": "Directory superiore",
     "save": "Salva",
     "edit": "Modifica"
+  },
+  "scheduler": {
+    "title": "Attività pianificate",
+    "automation": "Automazione",
+    "description": "Crea lavoro IA ricorrente, controlla le prossime esecuzioni e apri la cronologia chat prodotta da ogni attività.",
+    "newTask": "Nuova attività",
+    "tasks": "Attività",
+    "notScheduled": "Non pianificato",
+    "nextRun": "Prossima esecuzione",
+    "cadence": "Cadenza",
+    "lastRun": "Ultima esecuzione",
+    "model": "Modello",
+    "defaultModel": "Predefinito",
+    "runNow": "Esegui ora",
+    "resume": "Riprendi",
+    "pause": "Pausa",
+    "openChat": "Apri chat",
+    "noTasksHere": "Nessuna attività qui.",
+    "failedToCreate": "Impossibile creare l’attività",
+    "createTask": "Crea attività",
+    "loadingTasks": "Caricamento attività...",
+    "status": {
+      "active": "Attiva",
+      "paused": "In pausa",
+      "completed": "Completata",
+      "failed": "Non riuscita",
+      "cancelled": "Annullata"
+    },
+    "scheduleTypes": {
+      "once": "Una volta",
+      "daily": "Giornaliera",
+      "weekdays": "Giorni feriali",
+      "weekly": "Settimanale",
+      "interval": "Intervallo"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "Una volta alle {{time}}",
+      "dailyAt": "Ogni giorno alle {{time}}",
+      "weekdaysAt": "Giorni feriali alle {{time}}",
+      "weeklyAt": "{{days}} alle {{time}}",
+      "everyMinutes": "Ogni {{count}} min"
+    },
+    "days": {
+      "sun": "Dom",
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mer",
+      "thu": "Gio",
+      "fri": "Ven",
+      "sat": "Sab"
+    },
+    "sections": {
+      "attention": "Richiede attenzione",
+      "attentionDescription": "Automazioni in pausa o non riuscite che richiedono una decisione.",
+      "active": "Attive",
+      "activeDescription": "Prossime esecuzioni pianificate ordinate per orario.",
+      "history": "Cronologia",
+      "historyDescription": "Attività una tantum completate e automazioni annullate."
+    },
+    "form": {
+      "title": "Titolo",
+      "titlePlaceholder": "Brief di ricerca giornaliero",
+      "schedule": "Pianificazione",
+      "instruction": "Istruzione",
+      "instructionPlaceholder": "Indica esattamente cosa deve fare l’IA quando viene eseguita.",
+      "runAt": "Esegui alle",
+      "everyMinutes": "Ogni N minuti",
+      "time": "Ora",
+      "days": "Giorni",
+      "attachToCurrentChat": "Allega esecuzioni alla chat attuale"
+    }
   }
 }

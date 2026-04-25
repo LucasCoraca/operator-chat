@@ -176,5 +176,76 @@
     "goUp": "Subir un directorio",
     "save": "Guardar",
     "edit": "Editar"
+  },
+  "scheduler": {
+    "title": "Tareas programadas",
+    "automation": "Automatización",
+    "description": "Crea trabajo recurrente de IA, revisa próximas ejecuciones y abre el historial de chat producido por cada tarea.",
+    "newTask": "Nueva tarea",
+    "tasks": "Tareas",
+    "notScheduled": "No programado",
+    "nextRun": "Próxima ejecución",
+    "cadence": "Cadencia",
+    "lastRun": "Última ejecución",
+    "model": "Modelo",
+    "defaultModel": "Predeterminado",
+    "runNow": "Ejecutar ahora",
+    "resume": "Reanudar",
+    "pause": "Pausar",
+    "openChat": "Abrir chat",
+    "noTasksHere": "No hay tareas aquí.",
+    "failedToCreate": "Error al crear la tarea",
+    "createTask": "Crear tarea",
+    "loadingTasks": "Cargando tareas...",
+    "status": {
+      "active": "Activa",
+      "paused": "Pausada",
+      "completed": "Completada",
+      "failed": "Fallida",
+      "cancelled": "Cancelada"
+    },
+    "scheduleTypes": {
+      "once": "Una vez",
+      "daily": "Diario",
+      "weekdays": "Días laborables",
+      "weekly": "Semanal",
+      "interval": "Intervalo"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "Una vez a las {{time}}",
+      "dailyAt": "Diario a las {{time}}",
+      "weekdaysAt": "Días laborables a las {{time}}",
+      "weeklyAt": "{{days}} a las {{time}}",
+      "everyMinutes": "Cada {{count}} min"
+    },
+    "days": {
+      "sun": "Dom",
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mié",
+      "thu": "Jue",
+      "fri": "Vie",
+      "sat": "Sáb"
+    },
+    "sections": {
+      "attention": "Necesita atención",
+      "attentionDescription": "Automatizaciones pausadas o fallidas que requieren una decisión.",
+      "active": "Activas",
+      "activeDescription": "Próximas ejecuciones programadas ordenadas por hora.",
+      "history": "Historial",
+      "historyDescription": "Tareas únicas completadas y automatizaciones canceladas."
+    },
+    "form": {
+      "title": "Título",
+      "titlePlaceholder": "Resumen diario de investigación",
+      "schedule": "Programación",
+      "instruction": "Instrucción",
+      "instructionPlaceholder": "Dile a la IA exactamente qué hacer cuando se ejecute.",
+      "runAt": "Ejecutar en",
+      "everyMinutes": "Cada N minutos",
+      "time": "Hora",
+      "days": "Días",
+      "attachToCurrentChat": "Adjuntar ejecuciones al chat actual"
+    }
   }
 }

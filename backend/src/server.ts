@@ -16,7 +16,8 @@ import { ToolRegistry, ChatToolPreference } from './tools';
 import { ReActAgent, AgentStep, ToolApprovalRequest, ToolApprovalResponse } from './agent/ReActAgent';
 import { protect, registerUser, loginUser, getMe, AuthRequest } from './auth';
 import { initializeDatabase, testConnection } from './db';
-import { chatRepository, personalityRepository, settingsRepository } from './repositories';
+import { chatRepository, personalityRepository, settingsRepository, taskRepository, ScheduledTask } from './repositories';
+import { computeNextRun, computeNextRunForTask, normalizeDaysOfWeek } from './services/schedule';
 
 // JWT secret for socket.io
 const JWT_SECRET = process.env.JWT_SECRET || 'operator-chat-secret-key-12345';
@@ -179,6 +180,8 @@ async function initializeApp(): Promise<void> {
 
     // Load MCP servers
     await loadMCPServers();
+
+    startTaskScheduler();
 
     console.log('Application initialized successfully');
     console.log('Llama server:', loadedSettings.llama.baseUrl);
@@ -396,6 +399,7 @@ async function saveChat(session: ChatSession): Promise<void> {
         });
       } else {
         await chatRepository.addMessage({
+          id: msg.id,
           chatId: session.id,
           role: msg.role,
           content: msg.content,
@@ -440,6 +444,255 @@ function clearPendingApprovalsForChat(chatId: string, reason: ToolApprovalRespon
   }
 }
 
+async function getSelectedPersonality(): Promise<ChatPersonality | null> {
+  const selectedPersonalityId = loadedSettings.ui.selectedPersonality;
+  if (!selectedPersonalityId) return null;
+
+  const dbPersonality = await personalityRepository.findById(selectedPersonalityId);
+  if (!dbPersonality) return null;
+
+  return {
+    id: dbPersonality.id,
+    name: dbPersonality.name,
+    description: dbPersonality.description || '',
+    tone: dbPersonality.tone || '',
+    systemPrompt: dbPersonality.system_prompt,
+    isCustom: dbPersonality.is_custom,
+  };
+}
+
+function serializeTask(task: ScheduledTask) {
+  return {
+    id: task.id,
+    userId: task.user_id,
+    chatId: task.chat_id,
+    sandboxId: task.sandbox_id,
+    title: task.title,
+    prompt: task.prompt,
+    scheduleType: task.schedule_type,
+    runAt: task.run_at,
+    intervalMinutes: task.interval_minutes,
+    daysOfWeek: task.days_of_week,
+    timeOfDay: task.time_of_day,
+    timezone: task.timezone,
+    status: task.status,
+    model: task.model,
+    toolPreferences: normalizeToolPreferences(task.tool_preferences || {}),
+    approvalMode: task.approval_mode || { alwaysApprove: false },
+    reasoningEffort: task.reasoning_effort,
+    lastRunAt: task.last_run_at,
+    nextRunAt: task.next_run_at,
+    createdAt: task.created_at,
+    updatedAt: task.updated_at,
+  };
+}
+
+function createSessionForUser(userId: string, name = 'Scheduled Task'): ChatSession {
+  const chatId = crypto.randomUUID();
+  const sandbox = sandboxManager.createSandbox();
+  const now = new Date().toISOString();
+  const session: ChatSession = {
+    id: chatId,
+    userId,
+    sandboxId: sandbox.id,
+    messages: [],
+    name,
+    createdAt: now,
+    updatedAt: now,
+    toolPreferences: normalizeToolPreferences(),
+    approvalMode: { alwaysApprove: false },
+  };
+  chatSessions.set(chatId, session);
+  return session;
+}
+
+async function executeScheduledTask(task: ScheduledTask, force = false): Promise<void> {
+  if (!force && task.status !== 'active') return;
+  if (runningScheduledTaskIds.has(task.id)) return;
+
+  runningScheduledTaskIds.add(task.id);
+
+  let session = task.chat_id ? chatSessions.get(task.chat_id) : undefined;
+  if (!session || session.userId !== task.user_id) {
+    session = createSessionForUser(task.user_id, task.title);
+    await taskRepository.update(task.id, {
+      chat_id: session.id,
+      sandbox_id: session.sandboxId,
+    } as Partial<ScheduledTask>);
+    await saveChat(session);
+  }
+
+  const run = await taskRepository.createRun(task.id, session.id);
+  io.to(task.user_id).emit('task-run-started', { taskId: task.id, runId: run.id, chatId: session.id });
+
+  await taskRepository.updateRun(run.id, { status: 'running', started_at: new Date() } as any);
+  await taskRepository.update(task.id, { next_run_at: null } as Partial<ScheduledTask>);
+
+  const responseModel = task.model || loadedSettings.ui.selectedModel || llamaConfig.model;
+  if (!responseModel) {
+    const errorMessage = 'No model is configured for scheduled task execution';
+    await taskRepository.updateRun(run.id, { status: 'failed', completed_at: new Date(), error: errorMessage } as any);
+    await taskRepository.update(task.id, { status: 'failed', last_run_at: new Date() } as Partial<ScheduledTask>);
+    io.to(task.user_id).emit('task-run-failed', { taskId: task.id, runId: run.id, error: errorMessage });
+    runningScheduledTaskIds.delete(task.id);
+    return;
+  }
+  const maxIterationsMap: Record<string, number> = { low: 3, medium: 7, high: 15 };
+  const maxIterations = maxIterationsMap[task.reasoning_effort || 'medium'] || 7;
+  const scheduledMessage = `Scheduled task: ${task.title}\n\n${task.prompt}`;
+
+  session.toolPreferences = normalizeToolPreferences(task.tool_preferences || session.toolPreferences);
+  session.approvalMode = task.approval_mode || { alwaysApprove: false };
+  session.messages.push({ id: crypto.randomUUID(), role: 'user', content: scheduledMessage, agentSteps: [] });
+  session.updatedAt = new Date().toISOString();
+  io.to(session.id).emit('message', { role: 'user', content: scheduledMessage });
+
+  const conversationHistory = session.messages
+    .filter((msg, idx) => idx < session!.messages.length - 1)
+    .map((msg) => ({ role: msg.role, content: msg.content }));
+
+  const selectedPersonality = await getSelectedPersonality();
+  let approvalBlocked = false;
+
+  const agent = new ReActAgent(llamaClient, toolRegistry, maxIterations, {
+    onStep: (step: AgentStep) => {
+      io.to(session!.id).emit('agent-step', step);
+      io.to(task.user_id).emit('task-run-step', { taskId: task.id, runId: run.id, step });
+    },
+    onFinalAnswerToken: (token: string) => io.to(session!.id).emit('final-answer-token', { token, model: responseModel }),
+    onReasoningToken: (token: string) => io.to(session!.id).emit('thought-token', token),
+    onTimings: (timings: ChatTimings) => io.to(session!.id).emit('timings', timings),
+    onError: (error: string) => io.to(session!.id).emit('error', { message: error }),
+    onToolApprovalRequest: async (request: ToolApprovalRequest) => {
+      approvalBlocked = true;
+      await taskRepository.updateRun(run.id, {
+        status: 'needs_approval',
+        error: `Tool approval required for ${request.toolName}`,
+      } as any);
+      io.to(task.user_id).emit('task-approval-required', { taskId: task.id, runId: run.id, request });
+      return { approved: false, reason: 'denied' };
+    },
+    onStepSave: async (_chatId: string, step: AgentStep, allSteps: AgentStep[]) => {
+      session!.agentState = { steps: allSteps, isComplete: false, finalAnswer: null, model: responseModel };
+      for (let i = session!.messages.length - 1; i >= 0; i--) {
+        if (session!.messages[i].role === 'user') {
+          session!.messages[i] = { ...session!.messages[i], agentSteps: allSteps };
+          break;
+        }
+      }
+      await taskRepository.updateRun(run.id, { agent_steps: allSteps } as any);
+      saveChats();
+      io.to(session!.id).emit('step-saved', { step, allSteps });
+    },
+    onPartialFinalAnswer: (_chatId: string, partialContent: string) => {
+      if (session!.agentState) {
+        session!.agentState = { ...session!.agentState, partialFinalAnswer: partialContent };
+        saveChats();
+      }
+    },
+  }, selectedPersonality, 'en', responseModel);
+
+  session.currentAgent = agent;
+
+  try {
+    const userMemories = (await memoryManager.getMemories(task.user_id)).map(m => m.content);
+    const result = await agent.run(
+      session.id,
+      scheduledMessage,
+      session.sandboxId,
+      task.user_id,
+      conversationHistory,
+      userMemories,
+      session.toolPreferences,
+      session.approvalMode
+    );
+
+    session.agentState = {
+      steps: result.steps,
+      isComplete: result.isComplete,
+      finalAnswer: result.finalAnswer,
+      model: responseModel,
+    };
+
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      if (session.messages[i].role === 'user') {
+        session.messages[i] = { ...session.messages[i], agentSteps: result.steps };
+        break;
+      }
+    }
+
+    let resultMessageId: string | null = null;
+    if (result.finalAnswer) {
+      resultMessageId = crypto.randomUUID();
+      session.messages.push({
+        id: resultMessageId,
+        role: 'assistant',
+        content: result.finalAnswer,
+        model: responseModel,
+        agentSteps: [],
+      });
+      io.to(session.id).emit('message', { role: 'assistant', content: result.finalAnswer, model: responseModel });
+    }
+
+    session.updatedAt = new Date().toISOString();
+    await saveChat(session);
+
+    const completedAt = new Date();
+    const nextRun = computeNextRunForTask(task, completedAt);
+    await taskRepository.update(task.id, {
+      last_run_at: completedAt,
+      next_run_at: nextRun,
+      status: task.schedule_type === 'once' ? 'completed' : 'active',
+    } as Partial<ScheduledTask>);
+
+    await taskRepository.updateRun(run.id, {
+      status: approvalBlocked ? 'needs_approval' : 'completed',
+      completed_at: completedAt,
+      result_message_id: resultMessageId,
+      agent_steps: result.steps,
+    } as any);
+
+    io.to(session.id).emit('agent-complete', { finalAnswer: result.finalAnswer });
+    io.to(task.user_id).emit('task-run-completed', { taskId: task.id, runId: run.id, chatId: session.id });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    await taskRepository.updateRun(run.id, { status: 'failed', completed_at: new Date(), error: errorMessage } as any);
+    await taskRepository.update(task.id, { status: 'failed', last_run_at: new Date() } as Partial<ScheduledTask>);
+    io.to(session.id).emit('error', { message: errorMessage });
+    io.to(task.user_id).emit('task-run-failed', { taskId: task.id, runId: run.id, error: errorMessage });
+  } finally {
+    session.currentAgent = undefined;
+    runningScheduledTaskIds.delete(task.id);
+  }
+}
+
+let schedulerTimer: NodeJS.Timeout | null = null;
+let schedulerRunning = false;
+const runningScheduledTaskIds = new Set<string>();
+
+async function pollScheduledTasks(): Promise<void> {
+  if (schedulerRunning) return;
+  schedulerRunning = true;
+  try {
+    const dueTasks = await taskRepository.findDue(5);
+    for (const task of dueTasks) {
+      await executeScheduledTask(task);
+    }
+  } catch (error) {
+    console.error('Scheduled task poll failed:', error);
+  } finally {
+    schedulerRunning = false;
+  }
+}
+
+function startTaskScheduler(): void {
+  if (schedulerTimer) return;
+  schedulerTimer = setInterval(() => {
+    pollScheduledTasks().catch(console.error);
+  }, 30000);
+  pollScheduledTasks().catch(console.error);
+}
+
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
 app.get('/api/settings', (req, res) => {
   res.json({
@@ -464,6 +717,168 @@ app.post('/api/settings', async (req, res) => {
   }
 
   res.json({ success: true });
+});
+
+// Scheduled task endpoints
+app.get('/api/tasks', protect, async (req: AuthRequest, res) => {
+  const tasks = await taskRepository.findByUserId(req.user!.id);
+  res.json(tasks.map(serializeTask));
+});
+
+app.post('/api/tasks', protect, async (req: AuthRequest, res) => {
+  const {
+    title,
+    prompt,
+    scheduleType,
+    runAt,
+    intervalMinutes,
+    daysOfWeek,
+    timeOfDay,
+    timezone,
+    chatId,
+    model,
+    toolPreferences,
+    approvalMode,
+    reasoningEffort,
+  } = req.body;
+
+  if (!title || !prompt || !scheduleType) {
+    return res.status(400).json({ error: 'title, prompt, and scheduleType are required' });
+  }
+
+  if (!['once', 'daily', 'weekdays', 'weekly', 'interval'].includes(scheduleType)) {
+    return res.status(400).json({ error: 'Invalid scheduleType' });
+  }
+
+  const normalizedDaysOfWeek = normalizeDaysOfWeek(daysOfWeek);
+  const nextRunAt = computeNextRun({
+    scheduleType,
+    runAt,
+    intervalMinutes,
+    daysOfWeek: normalizedDaysOfWeek,
+    timeOfDay,
+  });
+
+  if (!nextRunAt) {
+    return res.status(400).json({ error: 'Schedule does not produce a future run time' });
+  }
+
+  let session: ChatSession | undefined;
+  if (chatId) {
+    const existingSession = chatSessions.get(chatId);
+    if (!existingSession || existingSession.userId !== req.user!.id) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    session = existingSession;
+  }
+
+  const task = await taskRepository.create({
+    userId: req.user!.id,
+    chatId: session?.id || null,
+    sandboxId: session?.sandboxId || null,
+    title,
+    prompt,
+    scheduleType,
+    runAt: runAt ? new Date(runAt) : null,
+    intervalMinutes,
+    daysOfWeek: normalizedDaysOfWeek,
+    timeOfDay,
+    timezone,
+    model,
+    toolPreferences: normalizeToolPreferences(toolPreferences),
+    approvalMode: approvalMode || { alwaysApprove: false },
+    reasoningEffort,
+    nextRunAt,
+  });
+
+  io.to(req.user!.id).emit('task-created', serializeTask(task));
+  res.status(201).json(serializeTask(task));
+});
+
+app.patch('/api/tasks/:taskId', protect, async (req: AuthRequest, res) => {
+  const task = await taskRepository.findById(req.params.taskId);
+  if (!task || task.user_id !== req.user!.id) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+
+  const nextShape = {
+    scheduleType: req.body.scheduleType || task.schedule_type,
+    runAt: req.body.runAt !== undefined ? req.body.runAt : task.run_at,
+    intervalMinutes: req.body.intervalMinutes !== undefined ? req.body.intervalMinutes : task.interval_minutes,
+    daysOfWeek: req.body.daysOfWeek !== undefined ? normalizeDaysOfWeek(req.body.daysOfWeek) : task.days_of_week,
+    timeOfDay: req.body.timeOfDay !== undefined ? req.body.timeOfDay : task.time_of_day,
+  };
+  const nextRunAt = req.body.status === 'paused' || req.body.status === 'cancelled'
+    ? null
+    : computeNextRun(nextShape as any);
+
+  const updated = await taskRepository.update(task.id, {
+    title: req.body.title ?? task.title,
+    prompt: req.body.prompt ?? task.prompt,
+    schedule_type: nextShape.scheduleType,
+    run_at: nextShape.runAt ? new Date(nextShape.runAt) : null,
+    interval_minutes: nextShape.intervalMinutes,
+    days_of_week: nextShape.daysOfWeek,
+    time_of_day: nextShape.timeOfDay,
+    timezone: req.body.timezone ?? task.timezone,
+    status: req.body.status ?? task.status,
+    model: req.body.model ?? task.model,
+    tool_preferences: req.body.toolPreferences ? normalizeToolPreferences(req.body.toolPreferences) : task.tool_preferences,
+    approval_mode: req.body.approvalMode ?? task.approval_mode,
+    reasoning_effort: req.body.reasoningEffort ?? task.reasoning_effort,
+    next_run_at: nextRunAt,
+  } as Partial<ScheduledTask>);
+
+  if (!updated) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  io.to(req.user!.id).emit('task-updated', serializeTask(updated));
+  res.json(serializeTask(updated));
+});
+
+app.delete('/api/tasks/:taskId', protect, async (req: AuthRequest, res) => {
+  const deleted = await taskRepository.delete(req.params.taskId, req.user!.id);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  io.to(req.user!.id).emit('task-deleted', { taskId: req.params.taskId });
+  res.json({ success: true });
+});
+
+app.get('/api/tasks/:taskId/runs', protect, async (req: AuthRequest, res) => {
+  const task = await taskRepository.findById(req.params.taskId);
+  if (!task || task.user_id !== req.user!.id) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  res.json(await taskRepository.findRunsByTaskId(task.id));
+});
+
+app.post('/api/tasks/:taskId/run-now', protect, async (req: AuthRequest, res) => {
+  const task = await taskRepository.findById(req.params.taskId);
+  if (!task || task.user_id !== req.user!.id) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  executeScheduledTask(task, true).catch((error) => console.error('Manual task run failed:', error));
+  res.json({ success: true });
+});
+
+app.post('/api/tasks/:taskId/pause', protect, async (req: AuthRequest, res) => {
+  const task = await taskRepository.findById(req.params.taskId);
+  if (!task || task.user_id !== req.user!.id) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  const updated = await taskRepository.update(task.id, { status: 'paused', next_run_at: null } as Partial<ScheduledTask>);
+  res.json(serializeTask(updated!));
+});
+
+app.post('/api/tasks/:taskId/resume', protect, async (req: AuthRequest, res) => {
+  const task = await taskRepository.findById(req.params.taskId);
+  if (!task || task.user_id !== req.user!.id) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  const nextRun = computeNextRunForTask(task);
+  const updated = await taskRepository.update(task.id, { status: 'active', next_run_at: nextRun } as Partial<ScheduledTask>);
+  res.json(serializeTask(updated!));
 });
 
 // Create new chat
@@ -866,6 +1281,7 @@ io.on('connection', (socket) => {
     try {
       const decoded: any = jwt.verify(data.token, JWT_SECRET);
       currentUserId = decoded.id;
+      socket.join(currentUserId!);
       socket.emit('authenticated');
       console.log(`Socket ${socket.id} authenticated as user ${currentUserId}`);
     } catch (error) {

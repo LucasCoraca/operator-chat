@@ -124,6 +124,55 @@ async function initializeDatabase() {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+        // Create scheduled tasks table
+        await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scheduled_tasks (
+        id VARCHAR(36) PRIMARY KEY,
+        user_id VARCHAR(36) NOT NULL,
+        chat_id VARCHAR(36),
+        sandbox_id VARCHAR(36),
+        title VARCHAR(255) NOT NULL,
+        prompt TEXT NOT NULL,
+        schedule_type ENUM('once', 'daily', 'weekdays', 'weekly', 'interval') NOT NULL,
+        run_at TIMESTAMP NULL,
+        interval_minutes INT NULL,
+        days_of_week JSON,
+        time_of_day VARCHAR(5),
+        timezone VARCHAR(64) NOT NULL DEFAULT 'UTC',
+        status ENUM('active', 'paused', 'completed', 'failed', 'cancelled') NOT NULL DEFAULT 'active',
+        model VARCHAR(255),
+        tool_preferences JSON,
+        approval_mode JSON,
+        reasoning_effort ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'medium',
+        last_run_at TIMESTAMP NULL,
+        next_run_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_scheduled_tasks_user_id (user_id),
+        INDEX idx_scheduled_tasks_due (status, next_run_at),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+        // Create scheduled task runs table
+        await pool.execute(`
+      CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+        id VARCHAR(36) PRIMARY KEY,
+        task_id VARCHAR(36) NOT NULL,
+        chat_id VARCHAR(36) NOT NULL,
+        status ENUM('queued', 'running', 'completed', 'failed', 'cancelled', 'needs_approval') NOT NULL DEFAULT 'queued',
+        started_at TIMESTAMP NULL,
+        completed_at TIMESTAMP NULL,
+        error TEXT,
+        result_message_id VARCHAR(36),
+        agent_steps JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_task_runs_task_id (task_id),
+        INDEX idx_task_runs_created_at (created_at),
+        FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
         console.log('Database schema initialized successfully');
     }
     catch (error) {

@@ -176,5 +176,76 @@
     "goUp": "Répertoire parent",
     "save": "Enregistrer",
     "edit": "Modifier"
+  },
+  "scheduler": {
+    "title": "Tâches planifiées",
+    "automation": "Automatisation",
+    "description": "Créez du travail IA récurrent, inspectez les prochaines exécutions et ouvrez l'historique de chat produit par chaque tâche.",
+    "newTask": "Nouvelle tâche",
+    "tasks": "Tâches",
+    "notScheduled": "Non planifié",
+    "nextRun": "Prochaine exécution",
+    "cadence": "Cadence",
+    "lastRun": "Dernière exécution",
+    "model": "Modèle",
+    "defaultModel": "Par défaut",
+    "runNow": "Exécuter maintenant",
+    "resume": "Reprendre",
+    "pause": "Suspendre",
+    "openChat": "Ouvrir le chat",
+    "noTasksHere": "Aucune tâche ici.",
+    "failedToCreate": "Échec de la création de la tâche",
+    "createTask": "Créer la tâche",
+    "loadingTasks": "Chargement des tâches...",
+    "status": {
+      "active": "Active",
+      "paused": "Suspendue",
+      "completed": "Terminée",
+      "failed": "Échouée",
+      "cancelled": "Annulée"
+    },
+    "scheduleTypes": {
+      "once": "Une fois",
+      "daily": "Quotidien",
+      "weekdays": "Jours ouvrés",
+      "weekly": "Hebdomadaire",
+      "interval": "Intervalle"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "Une fois à {{time}}",
+      "dailyAt": "Tous les jours à {{time}}",
+      "weekdaysAt": "Jours ouvrés à {{time}}",
+      "weeklyAt": "{{days}} à {{time}}",
+      "everyMinutes": "Toutes les {{count}} min"
+    },
+    "days": {
+      "sun": "Dim",
+      "mon": "Lun",
+      "tue": "Mar",
+      "wed": "Mer",
+      "thu": "Jeu",
+      "fri": "Ven",
+      "sat": "Sam"
+    },
+    "sections": {
+      "attention": "Nécessite une attention",
+      "attentionDescription": "Automatisations suspendues ou échouées nécessitant une décision.",
+      "active": "Actives",
+      "activeDescription": "Prochaines exécutions planifiées triées par heure.",
+      "history": "Historique",
+      "historyDescription": "Tâches ponctuelles terminées et automatisations annulées."
+    },
+    "form": {
+      "title": "Titre",
+      "titlePlaceholder": "Brief de recherche quotidien",
+      "schedule": "Planification",
+      "instruction": "Instruction",
+      "instructionPlaceholder": "Dites exactement à l'IA quoi faire lors de l'exécution.",
+      "runAt": "Exécuter à",
+      "everyMinutes": "Toutes les N minutes",
+      "time": "Heure",
+      "days": "Jours",
+      "attachToCurrentChat": "Joindre les exécutions au chat actuel"
+    }
   }
 }

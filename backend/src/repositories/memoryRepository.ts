@@ -14,6 +14,15 @@ export interface Memory {
   updated_at: Date;
 }
 
+interface RawMemoryRow {
+  id: string;
+  user_id: string;
+  content: string;
+  tags: unknown;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface CreateMemoryInput {
   userId: string;
   content: string;
@@ -25,16 +34,59 @@ export interface UpdateMemoryInput {
   tags?: string[];
 }
 
+function normalizeTags(value: unknown): string[] | null {
+  if (value == null) {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.filter((tag): tag is string => typeof tag === 'string');
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((tag): tag is string => typeof tag === 'string');
+      }
+    } catch {
+      return [trimmed];
+    }
+  }
+
+  return null;
+}
+
+function normalizeMemoryRow(row: RawMemoryRow | null): Memory | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    ...row,
+    tags: normalizeTags(row.tags),
+  };
+}
+
 export class MemoryRepository {
   async findById(id: string): Promise<Memory | null> {
-    return queryOne<Memory>('SELECT * FROM memories WHERE id = ?', [id]);
+    const row = await queryOne<RawMemoryRow>('SELECT * FROM memories WHERE id = ?', [id]);
+    return normalizeMemoryRow(row);
   }
 
   async findByUserId(userId: string): Promise<Memory[]> {
-    return query<Memory>(
+    const rows = await query<RawMemoryRow>(
       'SELECT * FROM memories WHERE user_id = ? ORDER BY created_at DESC',
       [userId]
     );
+    return rows
+      .map((row) => normalizeMemoryRow(row))
+      .filter((memory): memory is Memory => memory !== null);
   }
 
   async create(input: CreateMemoryInput): Promise<Memory> {
@@ -102,21 +154,27 @@ export class MemoryRepository {
 
   async search(userId: string, searchTerm: string): Promise<Memory[]> {
     const searchPattern = `%${searchTerm}%`;
-    return query<Memory>(
+    const rows = await query<RawMemoryRow>(
       `SELECT * FROM memories 
        WHERE user_id = ? AND (content LIKE ? OR JSON_CONTAINS(tags, ?))
        ORDER BY created_at DESC`,
       [userId, searchPattern, JSON.stringify(searchTerm)]
     );
+    return rows
+      .map((row) => normalizeMemoryRow(row))
+      .filter((memory): memory is Memory => memory !== null);
   }
 
   async findByTag(userId: string, tag: string): Promise<Memory[]> {
-    return query<Memory>(
+    const rows = await query<RawMemoryRow>(
       `SELECT * FROM memories 
        WHERE user_id = ? AND JSON_CONTAINS(tags, ?)
        ORDER BY created_at DESC`,
       [userId, JSON.stringify(tag)]
     );
+    return rows
+      .map((row) => normalizeMemoryRow(row))
+      .filter((memory): memory is Memory => memory !== null);
   }
 
   async countByUserId(userId: string): Promise<number> {

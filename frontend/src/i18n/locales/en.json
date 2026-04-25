@@ -176,5 +176,76 @@
     "goUp": "Go up one directory",
     "save": "Save",
     "edit": "Edit"
+  },
+  "scheduler": {
+    "title": "Scheduled Tasks",
+    "automation": "Automation",
+    "description": "Create recurring AI work, inspect upcoming runs, and open the chat history produced by each task.",
+    "newTask": "New task",
+    "tasks": "Tasks",
+    "notScheduled": "Not scheduled",
+    "nextRun": "Next Run",
+    "cadence": "Cadence",
+    "lastRun": "Last run",
+    "model": "Model",
+    "defaultModel": "Default",
+    "runNow": "Run now",
+    "resume": "Resume",
+    "pause": "Pause",
+    "openChat": "Open chat",
+    "noTasksHere": "No tasks here.",
+    "failedToCreate": "Failed to create task",
+    "createTask": "Create task",
+    "loadingTasks": "Loading tasks...",
+    "status": {
+      "active": "Active",
+      "paused": "Paused",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "scheduleTypes": {
+      "once": "Once",
+      "daily": "Daily",
+      "weekdays": "Weekdays",
+      "weekly": "Weekly",
+      "interval": "Interval"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "Once at {{time}}",
+      "dailyAt": "Daily at {{time}}",
+      "weekdaysAt": "Weekdays at {{time}}",
+      "weeklyAt": "{{days}} at {{time}}",
+      "everyMinutes": "Every {{count}} min"
+    },
+    "days": {
+      "sun": "Sun",
+      "mon": "Mon",
+      "tue": "Tue",
+      "wed": "Wed",
+      "thu": "Thu",
+      "fri": "Fri",
+      "sat": "Sat"
+    },
+    "sections": {
+      "attention": "Needs Attention",
+      "attentionDescription": "Paused or failed automations that need a decision.",
+      "active": "Active",
+      "activeDescription": "Upcoming scheduled runs ordered by next execution time.",
+      "history": "History",
+      "historyDescription": "Completed one-off tasks and cancelled automations."
+    },
+    "form": {
+      "title": "Title",
+      "titlePlaceholder": "Daily research brief",
+      "schedule": "Schedule",
+      "instruction": "Instruction",
+      "instructionPlaceholder": "Tell the AI exactly what to do when this runs.",
+      "runAt": "Run at",
+      "everyMinutes": "Every N minutes",
+      "time": "Time",
+      "days": "Days",
+      "attachToCurrentChat": "Attach runs to current chat"
+    }
   }
 }

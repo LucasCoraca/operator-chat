@@ -3,6 +3,8 @@ import { SandboxManager } from '../services/sandboxManager';
 import { BrowserClient } from '../services/browserClient';
 import { MemoryManager } from '../services/memoryManager';
 import { MCPClientManager, MCPToolDefinition } from '../services/mcpClientManager';
+import { taskRepository } from '../repositories/taskRepository';
+import { computeNextRun, normalizeDaysOfWeek } from '../services/schedule';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 
@@ -16,7 +18,8 @@ export type ToolCapability =
   | 'browser'
   | 'read_chat'
   | 'write_chat'
-  | 'memory';
+  | 'memory'
+  | 'schedule';
 
 export type ToolSandboxPolicy =
   | 'none'
@@ -42,9 +45,9 @@ export interface ChatToolPreference {
 export interface Tool {
   name: string;
   description: string;
-  parameters: Record<string, { type: string; description: string }>;
+  parameters: Record<string, { type: string; description: string; required?: boolean }>;
   policy: ToolExecutionPolicy;
-  execute: (args: Record<string, any>, context: { sandboxId: string; userId: string }) => Promise<string>;
+  execute: (args: Record<string, any>, context: { sandboxId: string; userId: string; chatId?: string; model?: string }) => Promise<string>;
 }
 
 export class ToolRegistry {
@@ -462,6 +465,83 @@ export class ToolRegistry {
         }
       },
     });
+
+    // Schedule Task Tool
+    this.tools.set('schedule_task', {
+      name: 'schedule_task',
+      description: 'Create a scheduled AI task for the current user. Use this when the user asks you to do something later or repeatedly, such as "tomorrow at 9", "every weekday", "daily", "weekly", or "every 30 minutes". The task will run the provided prompt in the background and write the result to the attached chat.',
+      parameters: {
+        title: { type: 'string', description: 'Short human-readable task title' },
+        prompt: { type: 'string', description: 'The full instruction the AI should execute when the task runs' },
+        scheduleType: { type: 'string', description: 'One of: once, daily, weekdays, weekly, interval' },
+        runAt: { type: 'string', description: 'ISO date/time for one-time tasks. Required only when scheduleType is once.', required: false },
+        intervalMinutes: { type: 'number', description: 'Number of minutes between runs. Required only when scheduleType is interval.', required: false },
+        daysOfWeek: { type: 'string', description: 'Comma-separated day numbers for weekly tasks, where 0=Sunday and 6=Saturday. Example: "1,3,5". Required only when scheduleType is weekly.', required: false },
+        timeOfDay: { type: 'string', description: 'Local HH:MM time for daily, weekdays, or weekly schedules. Example: "09:00".', required: false },
+        timezone: { type: 'string', description: 'IANA timezone name. Use UTC if unknown.', required: false },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: false,
+        capabilities: ['schedule', 'write_chat'],
+        sandboxPolicy: 'none',
+        riskLevel: 'medium',
+      },
+      execute: async (args, context) => {
+        const title = String(args.title || '').trim();
+        const prompt = String(args.prompt || '').trim();
+        const scheduleType = String(args.scheduleType || '').trim() as any;
+        const timezone = String(args.timezone || 'UTC').trim() || 'UTC';
+
+        if (!title || !prompt) {
+          return 'Error: title and prompt are required to schedule a task.';
+        }
+
+        if (!['once', 'daily', 'weekdays', 'weekly', 'interval'].includes(scheduleType)) {
+          return 'Error: scheduleType must be one of once, daily, weekdays, weekly, or interval.';
+        }
+
+        const rawDaysOfWeek = typeof args.daysOfWeek === 'string'
+          ? args.daysOfWeek.split(',').map((value: string) => value.trim())
+          : args.daysOfWeek;
+        const daysOfWeek = normalizeDaysOfWeek(rawDaysOfWeek);
+        const intervalMinutes = args.intervalMinutes !== undefined ? Number(args.intervalMinutes) : null;
+        const runAt = args.runAt ? String(args.runAt) : null;
+        const timeOfDay = args.timeOfDay ? String(args.timeOfDay) : null;
+
+        const nextRunAt = computeNextRun({
+          scheduleType,
+          runAt,
+          intervalMinutes,
+          daysOfWeek,
+          timeOfDay,
+        });
+
+        if (!nextRunAt) {
+          return 'Error: The schedule does not produce a future run time. For one-time tasks, provide a future ISO runAt value.';
+        }
+
+        const task = await taskRepository.create({
+          userId: context.userId,
+          chatId: context.chatId || null,
+          sandboxId: context.sandboxId || null,
+          title,
+          prompt,
+          scheduleType,
+          runAt: runAt ? new Date(runAt) : null,
+          intervalMinutes,
+          daysOfWeek,
+          timeOfDay,
+          timezone,
+          model: context.model || null,
+          approvalMode: { alwaysApprove: false },
+          reasoningEffort: 'medium',
+          nextRunAt,
+        });
+
+        return `Scheduled task created successfully.\nID: ${task.id}\nTitle: ${task.title}\nNext run: ${nextRunAt.toISOString()}\nSchedule type: ${task.schedule_type}`;
+      },
+    });
   }
 
   // Public method to re-register MCP tools (called when servers connect/disconnect)
@@ -484,7 +564,7 @@ export class ToolRegistry {
       const toolName = `mcp_${mcpTool.serverName}_${mcpTool.name}`;
       
       // Convert MCP input schema to our parameter format
-      const parameters: Record<string, { type: string; description: string }> = {};
+      const parameters: Record<string, { type: string; description: string; required?: boolean }> = {};
       const requiredParams = mcpTool.inputSchema.required || [];
       
       if (mcpTool.inputSchema.properties) {
@@ -616,7 +696,7 @@ export class ToolRegistry {
   async executeTool(
     name: string,
     args: Record<string, any>,
-    context: { sandboxId: string; userId: string },
+    context: { sandboxId: string; userId: string; chatId?: string; model?: string },
     enabledToolNames?: string[]
   ): Promise<string> {
     const availableTools = this.getFilteredTools(enabledToolNames);
@@ -639,7 +719,7 @@ export class ToolRegistry {
       .map(
         (tool: Tool) =>
           `${tool.name}(${Object.entries(tool.parameters)
-            .map(([k, v]: [string, { type: string; description: string }]) => `${k}: ${v.type}`)
+            .map(([k, v]) => `${k}: ${v.type}`)
             .join(', ')}): ${tool.description} [risk=${tool.policy.riskLevel}; sandbox=${tool.policy.sandboxPolicy}; approval=${tool.policy.requiresApproval ? 'required' : 'not-required'}]`
       )
       .join('\n');
@@ -675,7 +755,9 @@ export class ToolRegistry {
             },
             {} as Record<string, any>
           ),
-          required: Object.keys(tool.parameters),
+          required: Object.entries(tool.parameters)
+            .filter(([, value]) => value.required !== false)
+            .map(([key]) => key),
         },
       },
     }));
@@ -710,7 +792,9 @@ export class ToolRegistry {
             },
             {} as Record<string, any>
           ),
-          required: Object.keys(tool.parameters),
+          required: Object.entries(tool.parameters)
+            .filter(([, value]) => value.required !== false)
+            .map(([key]) => key),
         },
       },
     }));

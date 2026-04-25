@@ -84,7 +84,7 @@ class ChatRepository {
         return (0, db_1.query)('SELECT * FROM chat_messages WHERE chat_id = ? ORDER BY message_index ASC', [chatId]);
     }
     async addMessage(input) {
-        const id = crypto_1.default.randomUUID();
+        const id = input.id || crypto_1.default.randomUUID();
         await (0, db_1.execute)(`INSERT INTO chat_messages (id, chat_id, role, content, model, agent_steps, message_index)
        VALUES (?, ?, ?, ?, ?, ?, ?)`, [
             id,

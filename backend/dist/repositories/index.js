@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SettingsRepository = exports.settingsRepository = exports.PersonalityRepository = exports.personalityRepository = exports.MemoryRepository = exports.memoryRepository = exports.ChatRepository = exports.chatRepository = exports.UserRepository = exports.userRepository = void 0;
+exports.TaskRepository = exports.taskRepository = exports.SettingsRepository = exports.settingsRepository = exports.PersonalityRepository = exports.personalityRepository = exports.MemoryRepository = exports.memoryRepository = exports.ChatRepository = exports.chatRepository = exports.UserRepository = exports.userRepository = void 0;
 var userRepository_1 = require("./userRepository");
 Object.defineProperty(exports, "userRepository", { enumerable: true, get: function () { return userRepository_1.userRepository; } });
 Object.defineProperty(exports, "UserRepository", { enumerable: true, get: function () { return userRepository_1.UserRepository; } });
@@ -16,4 +16,7 @@ Object.defineProperty(exports, "PersonalityRepository", { enumerable: true, get:
 var settingsRepository_1 = require("./settingsRepository");
 Object.defineProperty(exports, "settingsRepository", { enumerable: true, get: function () { return settingsRepository_1.settingsRepository; } });
 Object.defineProperty(exports, "SettingsRepository", { enumerable: true, get: function () { return settingsRepository_1.SettingsRepository; } });
+var taskRepository_1 = require("./taskRepository");
+Object.defineProperty(exports, "taskRepository", { enumerable: true, get: function () { return taskRepository_1.taskRepository; } });
+Object.defineProperty(exports, "TaskRepository", { enumerable: true, get: function () { return taskRepository_1.TaskRepository; } });
 //# sourceMappingURL=index.js.map

@@ -9,12 +9,49 @@ const crypto_1 = __importDefault(require("crypto"));
 function toMysqlDateTime(date = new Date()) {
     return date.toISOString().slice(0, 19).replace('T', ' ');
 }
+function normalizeTags(value) {
+    if (value == null) {
+        return null;
+    }
+    if (Array.isArray(value)) {
+        return value.filter((tag) => typeof tag === 'string');
+    }
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            return null;
+        }
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+                return parsed.filter((tag) => typeof tag === 'string');
+            }
+        }
+        catch {
+            return [trimmed];
+        }
+    }
+    return null;
+}
+function normalizeMemoryRow(row) {
+    if (!row) {
+        return null;
+    }
+    return {
+        ...row,
+        tags: normalizeTags(row.tags),
+    };
+}
 class MemoryRepository {
     async findById(id) {
-        return (0, db_1.queryOne)('SELECT * FROM memories WHERE id = ?', [id]);
+        const row = await (0, db_1.queryOne)('SELECT * FROM memories WHERE id = ?', [id]);
+        return normalizeMemoryRow(row);
     }
     async findByUserId(userId) {
-        return (0, db_1.query)('SELECT * FROM memories WHERE user_id = ? ORDER BY created_at DESC', [userId]);
+        const rows = await (0, db_1.query)('SELECT * FROM memories WHERE user_id = ? ORDER BY created_at DESC', [userId]);
+        return rows
+            .map((row) => normalizeMemoryRow(row))
+            .filter((memory) => memory !== null);
     }
     async create(input) {
         const id = crypto_1.default.randomUUID();
@@ -63,14 +100,20 @@ class MemoryRepository {
     }
     async search(userId, searchTerm) {
         const searchPattern = `%${searchTerm}%`;
-        return (0, db_1.query)(`SELECT * FROM memories 
+        const rows = await (0, db_1.query)(`SELECT * FROM memories 
        WHERE user_id = ? AND (content LIKE ? OR JSON_CONTAINS(tags, ?))
        ORDER BY created_at DESC`, [userId, searchPattern, JSON.stringify(searchTerm)]);
+        return rows
+            .map((row) => normalizeMemoryRow(row))
+            .filter((memory) => memory !== null);
     }
     async findByTag(userId, tag) {
-        return (0, db_1.query)(`SELECT * FROM memories 
+        const rows = await (0, db_1.query)(`SELECT * FROM memories 
        WHERE user_id = ? AND JSON_CONTAINS(tags, ?)
        ORDER BY created_at DESC`, [userId, JSON.stringify(tag)]);
+        return rows
+            .map((row) => normalizeMemoryRow(row))
+            .filter((memory) => memory !== null);
     }
     async countByUserId(userId) {
         const result = await (0, db_1.queryOne)('SELECT COUNT(*) as count FROM memories WHERE user_id = ?', [userId]);

@@ -176,5 +176,76 @@
     "goUp": "Diretório superior",
     "save": "Salvar",
     "edit": "Editar"
+  },
+  "scheduler": {
+    "title": "Tarefas Agendadas",
+    "automation": "Automação",
+    "description": "Crie trabalhos recorrentes para a IA, acompanhe próximas execuções e abra o histórico de chat gerado por cada tarefa.",
+    "newTask": "Nova tarefa",
+    "tasks": "Tarefas",
+    "notScheduled": "Não agendado",
+    "nextRun": "Próxima execução",
+    "cadence": "Cadência",
+    "lastRun": "Última execução",
+    "model": "Modelo",
+    "defaultModel": "Padrão",
+    "runNow": "Executar agora",
+    "resume": "Retomar",
+    "pause": "Pausar",
+    "openChat": "Abrir chat",
+    "noTasksHere": "Nenhuma tarefa aqui.",
+    "failedToCreate": "Falha ao criar tarefa",
+    "createTask": "Criar tarefa",
+    "loadingTasks": "Carregando tarefas...",
+    "status": {
+      "active": "Ativa",
+      "paused": "Pausada",
+      "completed": "Concluída",
+      "failed": "Falhou",
+      "cancelled": "Cancelada"
+    },
+    "scheduleTypes": {
+      "once": "Uma vez",
+      "daily": "Diariamente",
+      "weekdays": "Dias úteis",
+      "weekly": "Semanal",
+      "interval": "Intervalo"
+    },
+    "scheduleDescriptions": {
+      "onceAt": "Uma vez em {{time}}",
+      "dailyAt": "Diariamente às {{time}}",
+      "weekdaysAt": "Dias úteis às {{time}}",
+      "weeklyAt": "{{days}} às {{time}}",
+      "everyMinutes": "A cada {{count}} min"
+    },
+    "days": {
+      "sun": "Dom",
+      "mon": "Seg",
+      "tue": "Ter",
+      "wed": "Qua",
+      "thu": "Qui",
+      "fri": "Sex",
+      "sat": "Sáb"
+    },
+    "sections": {
+      "attention": "Precisa de atenção",
+      "attentionDescription": "Automações pausadas ou com falha que precisam de uma decisão.",
+      "active": "Ativas",
+      "activeDescription": "Próximas execuções agendadas ordenadas pelo horário.",
+      "history": "Histórico",
+      "historyDescription": "Tarefas únicas concluídas e automações canceladas."
+    },
+    "form": {
+      "title": "Título",
+      "titlePlaceholder": "Resumo diário de pesquisa",
+      "schedule": "Agendamento",
+      "instruction": "Instrução",
+      "instructionPlaceholder": "Diga exatamente o que a IA deve fazer quando isso executar.",
+      "runAt": "Executar em",
+      "everyMinutes": "A cada N minutos",
+      "time": "Hora",
+      "days": "Dias",
+      "attachToCurrentChat": "Anexar execuções ao chat atual"
+    }
   }
 }
