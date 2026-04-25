@@ -45,7 +45,8 @@
     "today": "今天",
     "previous7Days": "过去7天",
     "older": "更早",
-    "memoryManager": "记忆管理器"
+    "memoryManager": "记忆管理器",
+    "newActivity": "新活动"
   },
   "chat": {
     "welcomeTitle": "欢迎使用 Operator Chat",

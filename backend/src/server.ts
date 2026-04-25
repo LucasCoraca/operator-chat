@@ -506,6 +506,16 @@ function createSessionForUser(userId: string, name = 'Scheduled Task'): ChatSess
   return session;
 }
 
+function emitChatUpdated(session: ChatSession): void {
+  io.to(session.userId).emit('chat-updated', {
+    chatId: session.id,
+    sandboxId: session.sandboxId,
+    name: session.name,
+    messageCount: session.messages.length,
+    updatedAt: session.updatedAt,
+  });
+}
+
 async function executeScheduledTask(task: ScheduledTask, force = false): Promise<void> {
   if (!force && task.status !== 'active') return;
   if (runningScheduledTaskIds.has(task.id)) return;
@@ -546,6 +556,7 @@ async function executeScheduledTask(task: ScheduledTask, force = false): Promise
   session.messages.push({ id: crypto.randomUUID(), role: 'user', content: scheduledMessage, agentSteps: [] });
   session.updatedAt = new Date().toISOString();
   io.to(session.id).emit('message', { role: 'user', content: scheduledMessage });
+  emitChatUpdated(session);
 
   const conversationHistory = session.messages
     .filter((msg, idx) => idx < session!.messages.length - 1)
@@ -636,6 +647,7 @@ async function executeScheduledTask(task: ScheduledTask, force = false): Promise
 
     session.updatedAt = new Date().toISOString();
     await saveChat(session);
+    emitChatUpdated(session);
 
     const completedAt = new Date();
     const nextRun = computeNextRunForTask(task, completedAt);
@@ -1371,6 +1383,8 @@ io.on('connection', (socket) => {
 
     // Add user message (without agent steps initially)
     session.messages.push({ id: crypto.randomUUID(), role: 'user', content: message, agentSteps: [] });
+    session.updatedAt = new Date().toISOString();
+    emitChatUpdated(session);
 
     // Emit user message
     socket.to(chatId).emit('message', {
@@ -1575,6 +1589,7 @@ io.on('connection', (socket) => {
       // Update timestamp and save chats
       session.updatedAt = new Date().toISOString();
       saveChats();
+      emitChatUpdated(session);
 
       io.to(chatId).emit('agent-complete', {
         finalAnswer: result.finalAnswer,

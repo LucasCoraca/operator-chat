@@ -45,7 +45,8 @@
     "today": "Сегодня",
     "previous7Days": "Последние 7 дней",
     "older": "Ранее",
-    "memoryManager": "Менеджер памяти"
+    "memoryManager": "Менеджер памяти",
+    "newActivity": "Новая активность"
   },
   "chat": {
     "welcomeTitle": "Добро пожаловать в Operator Chat",

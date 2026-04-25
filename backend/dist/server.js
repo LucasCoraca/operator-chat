@@ -395,6 +395,15 @@ function createSessionForUser(userId, name = 'Scheduled Task') {
     chatSessions.set(chatId, session);
     return session;
 }
+function emitChatUpdated(session) {
+    io.to(session.userId).emit('chat-updated', {
+        chatId: session.id,
+        sandboxId: session.sandboxId,
+        name: session.name,
+        messageCount: session.messages.length,
+        updatedAt: session.updatedAt,
+    });
+}
 async function executeScheduledTask(task, force = false) {
     if (!force && task.status !== 'active')
         return;
@@ -431,6 +440,7 @@ async function executeScheduledTask(task, force = false) {
     session.messages.push({ id: crypto_1.default.randomUUID(), role: 'user', content: scheduledMessage, agentSteps: [] });
     session.updatedAt = new Date().toISOString();
     io.to(session.id).emit('message', { role: 'user', content: scheduledMessage });
+    emitChatUpdated(session);
     const conversationHistory = session.messages
         .filter((msg, idx) => idx < session.messages.length - 1)
         .map((msg) => ({ role: msg.role, content: msg.content }));
@@ -503,6 +513,7 @@ async function executeScheduledTask(task, force = false) {
         }
         session.updatedAt = new Date().toISOString();
         await saveChat(session);
+        emitChatUpdated(session);
         const completedAt = new Date();
         const nextRun = (0, schedule_1.computeNextRunForTask)(task, completedAt);
         await repositories_1.taskRepository.update(task.id, {
@@ -1103,6 +1114,8 @@ io.on('connection', (socket) => {
         }
         // Add user message (without agent steps initially)
         session.messages.push({ id: crypto_1.default.randomUUID(), role: 'user', content: message, agentSteps: [] });
+        session.updatedAt = new Date().toISOString();
+        emitChatUpdated(session);
         // Emit user message
         socket.to(chatId).emit('message', {
             role: 'user',
@@ -1281,6 +1294,7 @@ io.on('connection', (socket) => {
             // Update timestamp and save chats
             session.updatedAt = new Date().toISOString();
             saveChats();
+            emitChatUpdated(session);
             io.to(chatId).emit('agent-complete', {
                 finalAnswer: result.finalAnswer,
             });

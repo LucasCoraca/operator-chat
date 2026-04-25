@@ -45,7 +45,8 @@
     "today": "Hoy",
     "previous7Days": "Últimos 7 Días",
     "older": "Más antiguos",
-    "memoryManager": "Gestor de Memoria"
+    "memoryManager": "Gestor de Memoria",
+    "newActivity": "Nueva actividad"
   },
   "chat": {
     "welcomeTitle": "Bienvenido a Operator Chat",

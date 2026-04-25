@@ -45,7 +45,8 @@
     "today": "오늘",
     "previous7Days": "최근 7일",
     "older": "이전",
-    "memoryManager": "메모리 관리자"
+    "memoryManager": "메모리 관리자",
+    "newActivity": "새 활동"
   },
   "chat": {
     "welcomeTitle": "Operator Chat에 오신 것을 환영합니다",

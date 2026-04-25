@@ -122,11 +122,15 @@ function groupChatsByDate(chats: Chat[]) {
 function ChatListItem({
   chat,
   isActive,
+  hasUnread,
+  unreadLabel,
   onSelect,
   onDelete,
 }: {
   chat: Chat;
   isActive: boolean;
+  hasUnread: boolean;
+  unreadLabel: string;
   onSelect: () => void;
   onDelete: (e: React.MouseEvent<HTMLButtonElement>) => void;
 }) {
@@ -145,6 +149,13 @@ function ChatListItem({
       >
         {chat.name}
       </button>
+      {hasUnread && !isActive && (
+        <span
+          className="size-2.5 flex-shrink-0 rounded-full bg-brand shadow-[0_0_0_3px_rgba(16,163,127,0.14)]"
+          title={unreadLabel}
+          aria-label={unreadLabel}
+        />
+      )}
       <button
         onClick={onDelete}
         className="rounded p-1 text-zinc-500 opacity-0 transition-all hover:bg-white/10 hover:text-white focus:opacity-100 group-hover:opacity-100"
@@ -200,8 +211,11 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [showPersonalityManager, setShowPersonalityManager] = useState(false);
   const [showMemoryManager, setShowMemoryManager] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
+  const [unreadChatIds, setUnreadChatIds] = useState<Set<string>>(new Set());
   const landingFileInputRef = useRef<HTMLInputElement>(null);
   const landingToolPickerRef = useRef<HTMLDivElement>(null);
+  const currentChatIdRef = useRef<string | null>(null);
+  const showTasksRef = useRef(false);
 
   const mergeToolPreferences = (tools: Tool[], incoming?: Record<string, ToolPreference>) =>
     tools.reduce((acc, tool) => {
@@ -238,6 +252,21 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
     setInvalidChatId(false);
     logout();
   };
+
+  useEffect(() => {
+    currentChatIdRef.current = currentChatId;
+    showTasksRef.current = showTasks;
+  }, [currentChatId, showTasks]);
+
+  useEffect(() => {
+    if (!currentChatId || showTasks) return;
+    setUnreadChatIds((prev) => {
+      if (!prev.has(currentChatId)) return prev;
+      const next = new Set(prev);
+      next.delete(currentChatId);
+      return next;
+    });
+  }, [currentChatId, showTasks]);
 
   const parseJsonSafely = async (res: Response) => {
     const text = await res.text();
@@ -336,11 +365,29 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       console.error('Socket authentication error:', error);
     });
 
+    newSocket.on('chat-updated', (payload: { chatId?: string }) => {
+      loadChats();
+      const chatId = payload.chatId;
+      if (!chatId) return;
+
+      const isCurrentlyVisible = currentChatIdRef.current === chatId && !showTasksRef.current;
+      setUnreadChatIds((prev) => {
+        const next = new Set(prev);
+        if (isCurrentlyVisible) {
+          next.delete(chatId);
+        } else {
+          next.add(chatId);
+        }
+        return next;
+      });
+    });
+
     setSocket(newSocket);
 
     return () => {
       newSocket.off('authenticated');
       newSocket.off('error');
+      newSocket.off('chat-updated');
       newSocket.close();
     };
   }, [token]);
@@ -639,6 +686,12 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
         headers: authService.getAuthHeader()
       });
       setChats((prev) => prev.filter((c) => c.id !== chatId));
+      setUnreadChatIds((prev) => {
+        if (!prev.has(chatId)) return prev;
+        const next = new Set(prev);
+        next.delete(chatId);
+        return next;
+      });
       if (currentChatId === chatId) {
         setCurrentChatId(null);
         setCurrentSandboxId(null);
@@ -828,7 +881,15 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
               key={chat.id}
               chat={chat}
               isActive={currentChatId === chat.id}
+              hasUnread={unreadChatIds.has(chat.id)}
+              unreadLabel={t('sidebar.newActivity')}
               onSelect={() => {
+                setUnreadChatIds((prev) => {
+                  if (!prev.has(chat.id)) return prev;
+                  const next = new Set(prev);
+                  next.delete(chat.id);
+                  return next;
+                });
                 setShowTasks(false);
                 navigate(`/chat/${chat.id}`);
                 setShowMobileSidebar(false);
@@ -943,6 +1004,12 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   <button
                     key={result.chatId}
                     onClick={() => {
+                      setUnreadChatIds((prev) => {
+                        if (!prev.has(result.chatId)) return prev;
+                        const next = new Set(prev);
+                        next.delete(result.chatId);
+                        return next;
+                      });
                       setShowTasks(false);
                       navigate(`/chat/${result.chatId}?msg=${result.matchingMessages[0]?.messageIndex ?? 0}`);
                       setShowMobileSidebar(false);
@@ -1049,6 +1116,12 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   <button
                     key={result.chatId}
                     onClick={() => {
+                      setUnreadChatIds((prev) => {
+                        if (!prev.has(result.chatId)) return prev;
+                        const next = new Set(prev);
+                        next.delete(result.chatId);
+                        return next;
+                      });
                       setShowTasks(false);
                       navigate(`/chat/${result.chatId}?msg=${result.matchingMessages[0]?.messageIndex ?? 0}`);
                       setShowMobileSidebar(false);
