@@ -71,6 +71,7 @@ interface ToolPreference {
 }
 
 interface ToolApprovalRequest {
+  chatId: string;
   approvalId: string;
   toolName: string;
   toolArgs: Record<string, any>;
@@ -518,10 +519,12 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     };
 
     const handleToolApprovalRequired = (request: ToolApprovalRequest) => {
+      if (request.chatId !== chatId) return;
       setPendingApproval(request);
     };
 
-    const handleToolApprovalResolved = (data: { approvalId: string }) => {
+    const handleToolApprovalResolved = (data: { chatId: string; approvalId: string }) => {
+      if (data.chatId !== chatId) return;
       setPendingApproval((current) => current?.approvalId === data.approvalId ? null : current);
     };
 
@@ -672,6 +675,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           
           // Set all state at once to ensure consistency
           setMessages(data.messages);
+          setPendingApproval(data.pendingApproval?.chatId === chatId ? data.pendingApproval : null);
           if (processingIndex !== null) {
             setIsProcessing(true);
             setProcessingMessageIndex(processingIndex);
@@ -1111,7 +1115,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
 
     socket.emit('tool-approval-response', {
-      chatId,
+      chatId: pendingApproval.chatId,
       approvalId: pendingApproval.approvalId,
       approved,
       reason: approved ? 'approved' : 'denied',

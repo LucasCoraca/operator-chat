@@ -336,6 +336,17 @@ function clearPendingApprovalsForChat(chatId, reason = 'cancelled') {
         pendingApprovals.delete(approvalId);
     }
 }
+function getPendingApprovalPayloadForChat(chatId) {
+    for (const approval of pendingApprovals.values()) {
+        if (approval.chatId === chatId) {
+            return {
+                ...approval.request,
+                chatId,
+            };
+        }
+    }
+    return null;
+}
 async function getSelectedPersonality() {
     const selectedPersonalityId = loadedSettings.ui.selectedPersonality;
     if (!selectedPersonalityId)
@@ -872,6 +883,7 @@ app.get('/api/chat/:chatId/messages', auth_1.protect, (req, res) => {
         name: session.name,
         toolPreferences: normalizeToolPreferences(session.toolPreferences),
         approvalMode: session.approvalMode,
+        pendingApproval: getPendingApprovalPayloadForChat(chatId),
     });
 });
 // Edit message content
@@ -1084,6 +1096,11 @@ io.on('connection', (socket) => {
             socket.emit('agent-state', stateToEmit);
             console.log(`Emitting agent state to reconnecting client for chat ${chatId}:`, stateToEmit);
         }
+        const pendingApproval = getPendingApprovalPayloadForChat(chatId);
+        if (pendingApproval) {
+            socket.emit('tool-approval-required', pendingApproval);
+            console.log(`Re-emitting pending approval ${pendingApproval.approvalId} to socket ${socket.id} for chat ${chatId}`);
+        }
     });
     socket.on('send-message', async (data) => {
         if (!currentUserId) {
@@ -1180,7 +1197,7 @@ io.on('connection', (socket) => {
             onToolApprovalRequest: async (request) => {
                 return await new Promise((resolve) => {
                     pendingApprovals.set(request.approvalId, { chatId, request, resolve });
-                    io.to(chatId).emit('tool-approval-required', request);
+                    io.to(chatId).emit('tool-approval-required', { ...request, chatId });
                 });
             },
             onStepSave: (savedChatId, step, allSteps) => {
@@ -1315,13 +1332,14 @@ io.on('connection', (socket) => {
             socket.emit('error', { message: 'Not authenticated' });
             return;
         }
-        const { chatId, approvalId, approved, reason, rememberAutoApprove, toolName } = data;
+        const { approvalId, approved, reason, rememberAutoApprove, toolName } = data;
         const pendingApproval = pendingApprovals.get(approvalId);
-        const session = chatSessions.get(chatId);
-        if (!pendingApproval || pendingApproval.chatId !== chatId) {
+        if (!pendingApproval || pendingApproval.chatId !== data.chatId) {
             socket.emit('error', { message: 'Approval request not found' });
             return;
         }
+        const chatId = pendingApproval.chatId;
+        const session = chatSessions.get(chatId);
         if (!session || session.userId !== currentUserId) {
             socket.emit('error', { message: 'Chat not found' });
             return;
@@ -1342,6 +1360,7 @@ io.on('connection', (socket) => {
             reason: reason ?? (approved ? 'approved' : 'denied'),
         });
         io.to(chatId).emit('tool-approval-resolved', {
+            chatId,
             approvalId,
             approved,
             reason: reason ?? (approved ? 'approved' : 'denied'),
