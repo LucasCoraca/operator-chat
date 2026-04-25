@@ -83,6 +83,8 @@ const upload = multer({
 interface UISettings {
   showStats: boolean;
   selectedPersonality: string;
+  selectedModel?: string;
+  defaultToolPreferences?: Record<string, ChatToolPreference>;
 }
 
 interface MCPServersConfig {
@@ -101,6 +103,8 @@ const defaultSettings = {
   ui: {
     showStats: false,
     selectedPersonality: 'professional',
+    selectedModel: undefined as string | undefined,
+    defaultToolPreferences: {} as Record<string, ChatToolPreference>,
   },
   mcpServers: {} as MCPServersConfig,
 };
@@ -166,6 +170,12 @@ async function initializeApp(): Promise<void> {
       ui: uiSettings || defaultSettings.ui,
       mcpServers: mcpServersSettings || defaultSettings.mcpServers,
     };
+    loadedSettings.ui.defaultToolPreferences = toolRegistry.mergeWithDefaultPreferences(
+      loadedSettings.ui.defaultToolPreferences
+    );
+
+    // Hydrate in-memory chat sessions from the database only after schema setup succeeds.
+    await loadChats();
 
     // Load MCP servers
     await loadMCPServers();
@@ -185,7 +195,10 @@ initializeApp().catch(console.error);
 function normalizeToolPreferences(
   preferences?: Record<string, ChatToolPreference>
 ): Record<string, ChatToolPreference> {
-  return toolRegistry.mergeWithDefaultPreferences(preferences);
+  return toolRegistry.mergeWithDefaultPreferences(
+    preferences,
+    loadedSettings.ui.defaultToolPreferences
+  );
 }
 
 // Chat sessions: Map<chatId, { sandboxId, messages, name }>
@@ -285,20 +298,33 @@ function normalizeChatSession(session: ChatSession): boolean {
   return toolPreferencesChanged || approvalModeChanged || messagesChanged;
 }
 
+function getChatNameFromQuery(query: string): string {
+  const normalized = query.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'New Conversation';
+  }
+
+  const maxLength = 80;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1).trimEnd()}…`
+    : normalized;
+}
+
 // Load chats from database on startup
 async function loadChats(): Promise<void> {
   try {
-    const chatSummaries = await chatRepository.findByUserId('legacy-user');
-    console.log(`Loaded ${chatSummaries.length} legacy chats from database`);
+    chatSessions.clear();
+    const persistedChats = await chatRepository.findAll();
+    console.log(`Loaded ${persistedChats.length} chats from database`);
     
-    for (const summary of chatSummaries) {
-      const result = await chatRepository.getWithMessages(summary.id);
+    for (const chat of persistedChats) {
+      const result = await chatRepository.getWithMessages(chat.id);
       if (result) {
-        const { chat, messages } = result;
+        const { chat: persistedChat, messages } = result;
         const session: ChatSession = {
-          id: chat.id,
-          userId: chat.user_id,
-          sandboxId: chat.sandbox_id,
+          id: persistedChat.id,
+          userId: persistedChat.user_id,
+          sandboxId: persistedChat.sandbox_id,
           messages: messages.map((msg, idx) => ({
             id: msg.id,
             role: msg.role,
@@ -306,15 +332,18 @@ async function loadChats(): Promise<void> {
             model: msg.model || undefined,
             agentSteps: msg.agent_steps || [],
           })),
-          name: chat.name,
-          createdAt: chat.created_at.toISOString(),
-          updatedAt: chat.updated_at.toISOString(),
-          agentState: chat.agent_state,
-          toolPreferences: chat.tool_preferences || {},
-          approvalMode: chat.approval_mode || { alwaysApprove: false },
+          name: persistedChat.name,
+          createdAt: persistedChat.created_at.toISOString(),
+          updatedAt: persistedChat.updated_at.toISOString(),
+          agentState: persistedChat.agent_state,
+          toolPreferences: persistedChat.tool_preferences || {},
+          approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
         };
-        normalizeChatSession(session);
-        chatSessions.set(chat.id, session);
+        const sessionChanged = normalizeChatSession(session);
+        chatSessions.set(persistedChat.id, session);
+        if (sessionChanged) {
+          await saveChat(session);
+        }
       }
     }
   } catch (error) {
@@ -336,6 +365,7 @@ async function saveChat(session: ChatSession): Promise<void> {
       });
     } else {
       await chatRepository.create({
+        id: session.id,
         userId: session.userId,
         sandboxId: session.sandboxId,
         name: session.name,
@@ -391,9 +421,6 @@ async function saveChats(): Promise<void> {
   }
 }
 
-// Load chats on startup
-loadChats().catch(console.error);
-
 // Auth routes
 app.post('/api/auth/register', registerUser);
 app.post('/api/auth/login', loginUser);
@@ -413,52 +440,14 @@ function clearPendingApprovalsForChat(chatId: string, reason: ToolApprovalRespon
   }
 }
 
-// Generate a conversation name using LLM
-async function generateConversationName(firstMessage: string, model?: string): Promise<string> {
-  try {
-    const prompt = `Create a short title (max 50 chars) for this conversation. Output only the title text.
-
-Message: ${firstMessage.substring(0, 300)}`;
-
-    const response = await llamaClient.chat(
-      [
-        { role: 'system', content: 'You generate conversation titles. Output only the title, no explanations or reasoning.' },
-        { role: 'user', content: prompt }
-      ],
-      { temperature: 0.3, maxTokens: 100, excludeReasoning: true, model }
-    );
-
-    // Extract just the title - look for the first line of actual content
-    let title = response.content?.trim() || '';
-    
-    // Remove common prefixes like "Title:", "Here is:", etc.
-    title = title.replace(/^(title:|here is|the title is|conversation:)\s*/i, '');
-    
-    // Take only the first line (in case there's extra content)
-    title = title.split('\n')[0].trim();
-    
-    // Remove any trailing punctuation that's not part of the title
-    title = title.replace(/[.!?]+$/, '');
-    
-    // Fallback to truncated message if title is empty or too long
-    if (!title || title.length > 50) {
-      title = firstMessage.substring(0, 50).trim() + '...';
-    }
-    
-    return title.substring(0, 50);
-  } catch (error) {
-    console.error('Error generating conversation name:', error);
-    // Fallback to truncated message
-    return firstMessage.substring(0, 50).trim() + '...';
-  }
-}
-
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
 app.get('/api/settings', (req, res) => {
   res.json({
     ui: {
       showStats: loadedSettings.ui.showStats,
       selectedPersonality: loadedSettings.ui.selectedPersonality,
+      selectedModel: loadedSettings.ui.selectedModel,
+      defaultToolPreferences: normalizeToolPreferences(loadedSettings.ui.defaultToolPreferences),
     },
   });
 });
@@ -468,6 +457,9 @@ app.post('/api/settings', async (req, res) => {
 
   if (ui) {
     loadedSettings.ui = { ...loadedSettings.ui, ...ui };
+    loadedSettings.ui.defaultToolPreferences = normalizeToolPreferences(
+      loadedSettings.ui.defaultToolPreferences
+    );
     await settingsRepository.setUiSettings(loadedSettings.ui);
   }
 
@@ -955,12 +947,10 @@ io.on('connection', (socket) => {
     };
     const maxIterations = maxIterationsMap[reasoningEffort || 'medium'] || 7;
 
-    // Generate conversation name if this is the first message
-    if (session.messages.length === 0) {
-      const generatedName = await generateConversationName(message, responseModel);
-      session.name = generatedName;
-      io.to(chatId).emit('chat-name-updated', { name: generatedName });
-      console.log(`Generated conversation name: "${generatedName}"`);
+    const isFirstUserMessage = !session.messages.some((existingMessage) => existingMessage.role === 'user');
+
+    if (isFirstUserMessage) {
+      session.name = getChatNameFromQuery(message);
     }
 
     // Add user message (without agent steps initially)

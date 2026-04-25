@@ -7,6 +7,7 @@ exports.ReActAgent = void 0;
 const xml_parser_1 = require("./xml-parser");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const TRANSITION_TO_COMPOSE_TOOL = 'transition_to_compose_mode';
 class FinalAnswerStreamer {
     inFinalAnswer = false;
     emittedContent = '';
@@ -72,12 +73,14 @@ class ReActAgent {
     personality = null;
     currentMode = 'research_mode';
     language = 'en';
-    constructor(llamaClient, toolRegistry, maxIterations = 10, callbacks, personality, language) {
+    model;
+    constructor(llamaClient, toolRegistry, maxIterations = 10, callbacks, personality, language, model) {
         this.llamaClient = llamaClient;
         this.toolRegistry = toolRegistry;
         this.maxIterations = maxIterations;
         this.personality = personality || null;
         this.language = language || 'en';
+        this.model = model;
         this.callbacks = {
             onStep: () => { },
             onError: () => { },
@@ -198,7 +201,6 @@ class ReActAgent {
         const blocks = (0, xml_parser_1.parseAssistantMessage)(trimmed, knownTools);
         const finalAnswerBlock = blocks.find(b => b.type === 'final_answer');
         const toolUseBlock = blocks.find(b => b.type === 'tool_use');
-        // Check for mode transition tag (more flexible regex)
         const toolUseBlocks = blocks.filter(b => b.type === 'tool_use');
         const finalAnswerBlocks = blocks.filter(b => b.type === 'final_answer');
         if (toolUseBlocks.length > 1) {
@@ -213,24 +215,22 @@ class ReActAgent {
                 failureReason: 'Your response included multiple invalid blocks. Output exactly one valid block.',
             };
         }
-        // Block final_answer in research_mode
+        if (Number(Boolean(toolUseBlock)) + Number(Boolean(finalAnswerBlock)) > 1) {
+            return {
+                type: 'invalid',
+                failureReason: 'Your response included conflicting formats. Provide one clear response.',
+            };
+        }
         if (this.currentMode === 'research_mode' && finalAnswerBlock) {
             return {
                 type: 'invalid',
-                failureReason: 'You are in research_mode. You must use tools to gather information.',
+                failureReason: `You are in research_mode. Do not answer the user yet. Continue researching with tools or call ${TRANSITION_TO_COMPOSE_TOOL} when research is complete.`,
             };
         }
-        // In compose_reply_mode, block tool calls
         if (this.currentMode === 'compose_reply_mode' && toolUseBlock) {
             return {
                 type: 'invalid',
                 failureReason: 'You are in compose_reply_mode. You cannot make tool calls. Provide a direct final answer.',
-            };
-        }
-        if (toolUseBlocks.length > 0 && finalAnswerBlocks.length > 0) {
-            return {
-                type: 'invalid',
-                failureReason: 'Your response included conflicting formats. Provide one clear response.',
             };
         }
         if (forceFinalAnswer && toolUseBlock) {
@@ -258,7 +258,18 @@ class ReActAgent {
                 finalAnswer: finalAnswerBlock.content,
             };
         }
-        // Native tool calling mode fallback: if there are no XML tags, treat plain text as final answer.
+        if (this.currentMode === 'research_mode') {
+            if (this.looksLikeContinuation(trimmed)) {
+                return {
+                    type: 'invalid',
+                    failureReason: `You described more research in prose instead of taking the next action. Call the next tool directly, or call ${TRANSITION_TO_COMPOSE_TOOL} if research is complete.`,
+                };
+            }
+            return {
+                type: 'invalid',
+                failureReason: `You are still in research_mode. Plain assistant text is not allowed yet. Call a tool or call ${TRANSITION_TO_COMPOSE_TOOL}.`,
+            };
+        }
         return {
             type: 'final_answer',
             finalAnswer: trimmed,
@@ -266,6 +277,18 @@ class ReActAgent {
     }
     parseStreamedResponse(streamedResult, forceFinalAnswer, currentIteration = 0) {
         if (streamedResult.toolCall?.name) {
+            if (streamedResult.toolCall.name === TRANSITION_TO_COMPOSE_TOOL) {
+                if (this.currentMode !== 'research_mode') {
+                    return {
+                        type: 'invalid',
+                        failureReason: `Tool call '${TRANSITION_TO_COMPOSE_TOOL}' is only allowed in research_mode.`,
+                    };
+                }
+                return {
+                    type: 'mode_transition',
+                    targetMode: 'compose_reply_mode',
+                };
+            }
             let parsedArgs = {};
             if (streamedResult.toolCall.arguments) {
                 try {
@@ -293,18 +316,30 @@ class ReActAgent {
         return this.parseTaggedResponse(streamedResult.finalContent, forceFinalAnswer, currentIteration);
     }
     getRetryDirective(parsedResponse, forceFinalAnswer) {
+        const retryToolName = this.extractInvalidToolName(parsedResponse.failureReason);
         if (forceFinalAnswer) {
             return {
-                requiredBlock: 'final_answer',
+                requiredBlock: this.currentMode === 'research_mode' ? 'tool_call' : 'final_answer',
                 failureReason: parsedResponse.failureReason ||
-                    'This was a forced final-answer turn, so you must provide a direct final answer.',
+                    (this.currentMode === 'research_mode'
+                        ? `This is the last research turn. Call ${TRANSITION_TO_COMPOSE_TOOL} now so the next turn can compose the answer.`
+                        : 'This was a forced final-answer turn, so you must provide a direct final answer.'),
+                retryToolName,
             };
         }
         const failureReason = parsedResponse.failureReason || 'Your response was invalid.';
         return {
             requiredBlock: 'tool_call_or_final_answer',
             failureReason,
+            retryToolName,
         };
+    }
+    extractInvalidToolName(failureReason) {
+        if (!failureReason) {
+            return undefined;
+        }
+        const match = failureReason.match(/Tool call arguments for '([^']+)'/);
+        return match?.[1];
     }
     recordInvalidTurn() {
         this.invalidTurnState.count += 1;
@@ -330,25 +365,28 @@ class ReActAgent {
         });
     }
     buildCorrectionMessage(retryDirective, retryCount) {
+        const malformedToolRetry = retryDirective.retryToolName
+            ? `Retry the native tool call \`${retryDirective.retryToolName}\` now with a valid JSON object for its arguments. Output only the tool call, no prose.`
+            : null;
         if (this.currentMode === 'research_mode') {
             if (retryCount >= 3) {
                 return `Invalid agent turn: ${retryDirective.failureReason}
 
-Retry #${retryCount}: call one tool via native function calling, or provide a direct final answer. Do not output XML.`;
+Retry #${retryCount}: ${malformedToolRetry || `use native function calling only. Either call the next research tool, or call ${TRANSITION_TO_COMPOSE_TOOL} when research is complete.`}`;
             }
             return `Invalid agent turn: ${retryDirective.failureReason}
 
-Retry #${retryCount}: use native function tool calling when you need a tool. Do not output XML tags.`;
+Retry #${retryCount}: ${malformedToolRetry || 'use native function calling only. Do not output plain assistant text in research_mode.'}`;
         }
         else {
             if (retryCount >= 3) {
                 return `Invalid agent turn: ${retryDirective.failureReason}
 
-Retry #${retryCount}: provide a plain final answer now. Do not call tools and do not output XML.`;
+Retry #${retryCount}: provide a plain final answer now. Do not call tools.`;
             }
             return `Invalid agent turn: ${retryDirective.failureReason}
 
-Retry #${retryCount}: provide a plain final answer (normal assistant text), no tool calls, no XML tags.`;
+Retry #${retryCount}: provide a plain final answer (normal assistant text), no tool calls.`;
         }
     }
     async emitFinalAnswerChunks(chunks) {
@@ -369,7 +407,23 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
             .map(([toolName]) => toolName);
     }
     getToolDefinitions(toolPreferences) {
-        return this.toolRegistry.getFilteredToolDefinitions(this.getEnabledToolNames(toolPreferences));
+        const enabledToolNames = this.getEnabledToolNames(toolPreferences);
+        const definitions = this.toolRegistry.getFilteredToolDefinitions(enabledToolNames);
+        if (this.currentMode === 'research_mode' && enabledToolNames.length > 0) {
+            definitions.push({
+                type: 'function',
+                function: {
+                    name: TRANSITION_TO_COMPOSE_TOOL,
+                    description: 'Call this only when research is complete and you are ready to stop using tools and compose the final answer for the user.',
+                    parameters: {
+                        type: 'object',
+                        properties: {},
+                        required: [],
+                    },
+                },
+            });
+        }
+        return definitions;
     }
     isToolAutoApproved(toolName, toolPreferences) {
         if (!toolPreferences) {
@@ -430,7 +484,9 @@ Use this information to provide a more personalized experience and avoid asking 
 IMPORTANT: These memories may contain historical dates or information. Always use the "Current Date" provided at the top of this prompt as the definitive current time.\n\n`;
         }
         const finalAnswerWarning = forceFinalAnswer
-            ? '\n\n## URGENT\nProvide your best final answer now. Do not call tools on this turn.'
+            ? this.currentMode === 'research_mode'
+                ? `\n\n## URGENT\nThis is the last research turn. Do NOT provide the final answer yet. Your only valid action is to call the native tool \`${TRANSITION_TO_COMPOSE_TOOL}\` so the next turn can compose the final answer.`
+                : '\n\n## URGENT\nProvide your best final answer now. Do not call tools on this turn.'
             : '';
         // Add iterations remaining context
         const iterationsRemaining = this.maxIterations - currentIteration;
@@ -441,18 +497,31 @@ ${iterationsContext}
 
 ${this.getLanguageInstruction()}
 
-You are a helpful AI assistant with access to tools.
+You are a helpful AI assistant.${toolsAvailable ? ' You have access to tools.' : ' No tools are enabled for this turn, so answer directly without tool calls.'}
 ${personalitySection}${memorySection}
 
 ## TOOL CALLING
 - Use native function tool calling when you need tools.
 - Use only structured tool calls for tools.
-- If you can answer directly, return a normal assistant response.
-- If ${forceFinalAnswer ? 'this is the final turn' : 'you still need more data'}, ${forceFinalAnswer ? 'do not call tools' : 'call tools instead of describing tool usage in prose'}.
+- Do not assume that normal assistant text is safe to emit unless the mode instructions below explicitly allow it.
+- If ${forceFinalAnswer ? 'you are on a forced turn' : 'you still need more data'}, ${forceFinalAnswer
+            ? this.currentMode === 'research_mode'
+                ? `do not answer the user directly; call \`${TRANSITION_TO_COMPOSE_TOOL}\``
+                : 'do not call tools'
+            : 'call tools instead of describing tool usage in prose'}.
 
 ${this.currentMode === 'research_mode' ? `
+## MODE
+You are in RESEARCH_MODE.
+- Your job is to gather information, inspect files, and execute tool calls.
+- Do NOT provide the final answer to the user in this mode.
+- Do NOT output ordinary assistant prose as your main response in this mode.
+- When research is complete and you are ready to answer, call the native tool \`${TRANSITION_TO_COMPOSE_TOOL}\`.
+- If you still need information, call the next tool directly using native function calling.
+- On the final research turn, call \`${TRANSITION_TO_COMPOSE_TOOL}\` immediately. Do not answer in prose.
+
 ## SOURCE CITATION REQUIREMENT
-When you use web_search or browser_visit tools, cite sources in your final response with URL and title/description.
+When you use web_search or browser_visit tools, you must it is imperative to do so cite sources in your final response with URL and title/description.
 
 Format citations like this at the end of your answer:
 
@@ -487,7 +556,18 @@ In your response, you can reference downloadable files like this:
 
 ${this.currentMode === 'compose_reply_mode' ? `
 ## MODE
-You are in COMPOSE_REPLY_MODE. Do not call tools. Synthesize the best final answer from gathered observations.
+You are in COMPOSE_REPLY_MODE.
+- Do not call tools.
+- Synthesize the best final answer from gathered observations.
+- Output the final answer as normal assistant text.
+
+## SOURCE CITATION REQUIREMENT
+When you use web_search or browser_visit tools, you must it is imperative to do so cite sources in your final response.
+
+Always use inline sources like this: "[Source Name](URL), ..."
+
+This is REQUIRED for any factual claims, statistics, news, or information obtained from web searches or browsing.
+
 ` : ''}
 
 Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning}`;
@@ -604,8 +684,9 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
             iteration: 0,
             isComplete: false,
             finalAnswer: null,
-            mode: 'research_mode',
+            mode: this.getEnabledToolNames(toolPreferences).length > 0 ? 'research_mode' : 'compose_reply_mode',
         };
+        this.setMode(state.mode);
         // Set running state and create AbortController for cancellation
         this.isRunning = true;
         this.abortController = new AbortController();
@@ -634,17 +715,18 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
                 // Build conversation history
                 const messages = this.buildConversationHistory(userMessage, state, conversationHistory, forceFinalAnswer, toolPreferences, memories);
                 this.logDebug(`Messages count: ${messages.length}`);
-                // Stream final answer tokens live for both modes.
-                const shouldEmitFinalAnswer = true;
+                const shouldEmitFinalAnswer = this.currentMode === 'compose_reply_mode';
                 const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
                     this.callbacks.onFinalAnswerToken(token);
-                }, shouldEmitFinalAnswer);
+                }, shouldEmitFinalAnswer, shouldEmitFinalAnswer
+                    ? (partialContent) => this.callbacks.onPartialFinalAnswer?.(chatId, partialContent)
+                    : undefined);
                 const streamedResult = await this.llamaClient.chatStream(messages, (timings) => {
                     // Forward timing data to frontend
                     if (timings) {
                         this.callbacks.onTimings(timings);
                     }
-                }, this.abortController, forceFinalAnswer || this.currentMode === 'compose_reply_mode'
+                }, this.abortController, this.currentMode === 'compose_reply_mode'
                     ? undefined
                     : this.getToolDefinitions(toolPreferences), {
                     onReasoningToken: (token) => {
@@ -653,6 +735,7 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
                     onContentToken: (token) => {
                         finalAnswerStreamer.push(token);
                     },
+                    model: this.model,
                 });
                 finalAnswerStreamer.finalize();
                 const bufferedContent = streamedResult.finalContent;
@@ -728,7 +811,7 @@ Now compose your final answer as normal assistant text.`;
                             toolPreferences, memories);
                             const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
                                 this.callbacks.onFinalAnswerToken(token);
-                            }, true);
+                            }, true, (partialContent) => this.callbacks.onPartialFinalAnswer?.(chatId, partialContent));
                             const streamedResult = await this.llamaClient.chatStream(messages, (timings) => {
                                 if (timings) {
                                     this.callbacks.onTimings(timings);
@@ -740,6 +823,7 @@ Now compose your final answer as normal assistant text.`;
                                 onContentToken: (token) => {
                                     finalAnswerStreamer.push(token);
                                 },
+                                model: this.model,
                             });
                             finalAnswerStreamer.finalize();
                             const parsedResponse = this.parseStreamedResponse(streamedResult, true, state.iteration);
@@ -995,7 +1079,7 @@ Now compose your final answer using all the information above as normal assistan
                     const shouldEmitFinalAnswer = true; // In compose mode, emit directly
                     const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
                         this.callbacks.onFinalAnswerToken(token);
-                    }, shouldEmitFinalAnswer);
+                    }, shouldEmitFinalAnswer, (partialContent) => this.callbacks.onPartialFinalAnswer?.(chatId, partialContent));
                     const streamedResult = await this.llamaClient.chatStream(messages, (timings) => {
                         if (timings) {
                             this.callbacks.onTimings(timings);
@@ -1007,6 +1091,7 @@ Now compose your final answer using all the information above as normal assistan
                         onContentToken: (token) => {
                             finalAnswerStreamer.push(token);
                         },
+                        model: this.model,
                     });
                     finalAnswerStreamer.finalize();
                     const parsedResponse = this.parseStreamedResponse(streamedResult, true);

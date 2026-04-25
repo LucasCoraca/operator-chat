@@ -20,6 +20,7 @@ export interface ChatMessage {
     created_at: Date;
 }
 export interface CreateChatInput {
+    id?: string;
     userId: string;
     sandboxId: string;
     name?: string;
@@ -43,6 +44,7 @@ export interface ChatSummary {
     updated_at: Date;
 }
 export declare class ChatRepository {
+    findAll(): Promise<Chat[]>;
     findById(id: string): Promise<Chat | null>;
     findByUserId(userId: string): Promise<ChatSummary[]>;
     create(input: CreateChatInput): Promise<Chat>;

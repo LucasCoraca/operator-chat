@@ -6,6 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.memoryRepository = exports.MemoryRepository = void 0;
 const db_1 = require("../db");
 const crypto_1 = __importDefault(require("crypto"));
+function toMysqlDateTime(date = new Date()) {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+}
 class MemoryRepository {
     async findById(id) {
         return (0, db_1.queryOne)('SELECT * FROM memories WHERE id = ?', [id]);
@@ -15,7 +18,7 @@ class MemoryRepository {
     }
     async create(input) {
         const id = crypto_1.default.randomUUID();
-        const now = new Date().toISOString();
+        const now = toMysqlDateTime();
         await (0, db_1.execute)(`INSERT INTO memories (id, user_id, content, tags, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
             id,
@@ -44,7 +47,7 @@ class MemoryRepository {
         if (fields.length === 0)
             return this.findById(id);
         fields.push('updated_at = ?');
-        values.push(new Date().toISOString());
+        values.push(toMysqlDateTime());
         values.push(id);
         values.push(userId);
         await (0, db_1.execute)(`UPDATE memories SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`, values);

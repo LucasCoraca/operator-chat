@@ -6,7 +6,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.chatRepository = exports.ChatRepository = void 0;
 const db_1 = require("../db");
 const crypto_1 = __importDefault(require("crypto"));
+function toMysqlDateTime(date = new Date()) {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+}
 class ChatRepository {
+    async findAll() {
+        return (0, db_1.query)('SELECT * FROM chats ORDER BY updated_at DESC');
+    }
     async findById(id) {
         return (0, db_1.queryOne)('SELECT * FROM chats WHERE id = ?', [id]);
     }
@@ -20,8 +26,8 @@ class ChatRepository {
        ORDER BY c.updated_at DESC`, [userId]);
     }
     async create(input) {
-        const id = crypto_1.default.randomUUID();
-        const now = new Date().toISOString();
+        const id = input.id || crypto_1.default.randomUUID();
+        const now = toMysqlDateTime();
         await (0, db_1.execute)(`INSERT INTO chats (id, user_id, sandbox_id, name, tool_preferences, approval_mode, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
             id,
@@ -60,7 +66,7 @@ class ChatRepository {
         if (fields.length === 0)
             return this.findById(id);
         fields.push('updated_at = ?');
-        values.push(new Date().toISOString());
+        values.push(toMysqlDateTime());
         values.push(id);
         await (0, db_1.execute)(`UPDATE chats SET ${fields.join(', ')} WHERE id = ?`, values);
         return this.findById(id);
@@ -90,7 +96,7 @@ class ChatRepository {
             input.messageIndex
         ]);
         // Update chat's updated_at
-        await (0, db_1.execute)('UPDATE chats SET updated_at = ? WHERE id = ?', [new Date().toISOString(), input.chatId]);
+        await (0, db_1.execute)('UPDATE chats SET updated_at = ? WHERE id = ?', [toMysqlDateTime(), input.chatId]);
         const message = await (0, db_1.queryOne)('SELECT * FROM chat_messages WHERE id = ?', [id]);
         if (!message)
             throw new Error('Failed to create message');

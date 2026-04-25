@@ -62,7 +62,8 @@ export declare class ReActAgent {
     private personality;
     private currentMode;
     private language;
-    constructor(llamaClient: LlamaClient, toolRegistry: ToolRegistry, maxIterations?: number, callbacks?: Partial<AgentCallbacks>, personality?: ChatPersonality | null, language?: string);
+    private model;
+    constructor(llamaClient: LlamaClient, toolRegistry: ToolRegistry, maxIterations?: number, callbacks?: Partial<AgentCallbacks>, personality?: ChatPersonality | null, language?: string, model?: string);
     private setMode;
     cancel(): void;
     isAgentRunning(): boolean;
@@ -71,6 +72,7 @@ export declare class ReActAgent {
     private parseTaggedResponse;
     private parseStreamedResponse;
     private getRetryDirective;
+    private extractInvalidToolName;
     private recordInvalidTurn;
     private resetInvalidTurnState;
     private replaceLatestCorrection;

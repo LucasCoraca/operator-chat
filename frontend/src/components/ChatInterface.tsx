@@ -45,10 +45,10 @@ interface ChatInterfaceProps {
   socket: Socket | null;
   chatId: string;
   sandboxId: string;
-  onChatNameUpdated?: (name: string) => void;
   models: string[];
   currentModel: string;
   onModelChange: (model: string) => void;
+  onChatNameChange: (chatId: string, name: string) => void;
   showStats: boolean;
 }
 
@@ -141,7 +141,19 @@ function normalizeAgentSteps(steps: AgentStep[], hasResolvedAssistantResponse: b
 // Virtual scrolling configuration
 const SCROLL_THRESHOLD = 300; // Pixels from bottom to show jump button
 
-function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, currentModel, onModelChange, showStats }: ChatInterfaceProps) {
+function getChatNameFromQuery(query: string): string {
+  const normalized = query.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'New Chat';
+  }
+
+  const maxLength = 80;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1).trimEnd()}…`
+    : normalized;
+}
+
+function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onModelChange, onChatNameChange, showStats }: ChatInterfaceProps) {
   const { t } = useTranslation();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -505,10 +517,6 @@ function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, c
       }
     };
 
-    const handleChatNameUpdated = (data: { name: string }) => {
-      onChatNameUpdated?.(data.name);
-    };
-
     const handleToolApprovalRequired = (request: ToolApprovalRequest) => {
       setPendingApproval(request);
     };
@@ -588,7 +596,6 @@ function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, c
     socket.on('final-answer-token', onFinalAnswerToken);
     socket.on('agent-complete', onAgentComplete);
     socket.on('error', onError);
-    socket.on('chat-name-updated', handleChatNameUpdated);
     socket.on('agent-stopped', onAgentStopped);
     socket.on('timings', handleTimings);
     socket.on('tool-approval-required', handleToolApprovalRequired);
@@ -608,7 +615,6 @@ function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, c
       socket.off('final-answer-token', onFinalAnswerToken);
       socket.off('agent-complete', onAgentComplete);
       socket.off('error', onError);
-      socket.off('chat-name-updated', handleChatNameUpdated);
       socket.off('agent-stopped', onAgentStopped);
       socket.off('timings', handleTimings);
       socket.off('tool-approval-required', handleToolApprovalRequired);
@@ -616,7 +622,7 @@ function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, c
       socket.off('tool-preferences-updated', handleToolPreferencesUpdated);
       socket.off('step-saved', handleStepSaved);
     };
-  }, [appendPendingThoughtToSteps, availableTools, chatId, currentModel, mergeToolPreferences, onChatNameUpdated, processingMessageIndex, socket]);
+  }, [appendPendingThoughtToSteps, availableTools, chatId, currentModel, mergeToolPreferences, processingMessageIndex, socket]);
 
   // Load messages from server (separate effect to avoid re-fetching on socket/tool changes)
   useEffect(() => {
@@ -860,6 +866,9 @@ function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, c
 
   const sendMessageContent = useCallback((message: string) => {
     if (!message.trim() || !socket) return false;
+    if (!messagesRef.current.some((existingMessage) => existingMessage.role === 'user')) {
+      onChatNameChange(chatId, getChatNameFromQuery(message));
+    }
     setIsProcessing(true);
     setIsStopping(false);
     setCurrentAgentSteps([]);
@@ -875,7 +884,7 @@ function ChatInterface({ socket, chatId, sandboxId, onChatNameUpdated, models, c
     const language = i18n.language || 'en';
     socket.emit('send-message', { chatId, message: message.trim(), model: currentModel, toolPreferences, approvalMode, language, reasoningEffort });
     return true;
-  }, [approvalMode, chatId, currentModel, showStats, socket, toolPreferences, reasoningEffort]);
+  }, [approvalMode, chatId, currentModel, onChatNameChange, showStats, socket, toolPreferences, reasoningEffort]);
 
   useEffect(() => {
     const initialMessage = initialRouteState?.initialMessage;

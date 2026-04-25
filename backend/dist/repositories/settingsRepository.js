@@ -68,6 +68,7 @@ class SettingsRepository {
         return this.get('ui') || {
             showStats: false,
             selectedPersonality: 'professional',
+            defaultToolPreferences: {},
         };
     }
     async setUiSettings(settings) {

@@ -17,7 +17,27 @@ interface Settings {
   ui: {
     showStats: boolean;
     selectedPersonality: string;
+    selectedModel?: string;
+    defaultToolPreferences: Record<string, ToolPreference>;
   };
+}
+
+interface Tool {
+  name: string;
+  description: string;
+  parameters: Record<string, { type: string; description: string }>;
+  policy: {
+    requiresApproval: boolean;
+    supportsAutoApprove: boolean;
+    capabilities: string[];
+    sandboxPolicy: string;
+    riskLevel: 'low' | 'medium' | 'high';
+  };
+}
+
+interface ToolPreference {
+  enabled: boolean;
+  autoApprove: boolean;
 }
 
 interface SettingsPanelProps {
@@ -25,6 +45,7 @@ interface SettingsPanelProps {
   onSave: (settings: Settings) => void;
   onClose: () => void;
   personalities: ChatPersonality[];
+  tools: Tool[];
   onManagePersonalities: () => void;
   isPersonalityManagerOpen?: boolean;
 }
@@ -34,6 +55,7 @@ function SettingsPanel({
   onSave,
   onClose,
   personalities,
+  tools,
   onManagePersonalities,
   isPersonalityManagerOpen = false
 }: SettingsPanelProps) {
@@ -65,6 +87,38 @@ function SettingsPanel({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onSave(formData);
+  };
+
+  const toggleDefaultTool = (toolName: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      ui: {
+        ...prev.ui,
+        defaultToolPreferences: {
+          ...prev.ui.defaultToolPreferences,
+          [toolName]: {
+            enabled: !(prev.ui.defaultToolPreferences[toolName]?.enabled ?? true),
+            autoApprove: prev.ui.defaultToolPreferences[toolName]?.autoApprove ?? false,
+          },
+        },
+      },
+    }));
+  };
+
+  const toggleDefaultAutoApprove = (toolName: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      ui: {
+        ...prev.ui,
+        defaultToolPreferences: {
+          ...prev.ui.defaultToolPreferences,
+          [toolName]: {
+            enabled: prev.ui.defaultToolPreferences[toolName]?.enabled ?? true,
+            autoApprove: !(prev.ui.defaultToolPreferences[toolName]?.autoApprove ?? false),
+          },
+        },
+      },
+    }));
   };
 
   const handleBackdropClick = () => {
@@ -128,6 +182,66 @@ function SettingsPanel({
                   onChange={(e) => handleChange('ui', 'showStats', e.target.checked)}
                   className="w-4 h-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50 focus:ring-2"
                 />
+              </div>
+            </div>
+
+            <hr className="border-white/10" />
+
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold text-brand">{t('settings.toolDefaults')}</h3>
+              <p className="text-sm text-zinc-500">{t('settings.toolDefaultsDescription')}</p>
+
+              <div className="space-y-3">
+                {tools.map((tool) => {
+                  const preference = formData.ui.defaultToolPreferences[tool.name] ?? {
+                    enabled: true,
+                    autoApprove: !tool.policy.requiresApproval,
+                  };
+
+                  return (
+                    <div
+                      key={tool.name}
+                      className="rounded-xl border border-white/10 bg-black/20 p-3"
+                    >
+                      <label className="flex cursor-pointer items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={preference.enabled}
+                          onChange={() => toggleDefaultTool(tool.name)}
+                          className="mt-0.5 h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-zinc-100">{tool.name}</div>
+                          <div className="mt-1 text-xs leading-5 text-zinc-400">{tool.description}</div>
+                        </div>
+                      </label>
+
+                      <div className="mt-3 ml-7 flex items-center justify-between rounded-lg border border-white/5 bg-white/[0.02] px-2.5 py-2">
+                        <span className="text-[11px] text-zinc-500">{t('settings.preApproveByDefault')}</span>
+                        {tool.policy.supportsAutoApprove ? (
+                          <label className="flex items-center gap-2 text-[11px] text-zinc-300">
+                            <input
+                              type="checkbox"
+                              checked={preference.autoApprove}
+                              onChange={() => toggleDefaultAutoApprove(tool.name)}
+                              disabled={!preference.enabled}
+                              className="h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50 disabled:opacity-50"
+                            />
+                            <span>{t('settings.applyToNewChats')}</span>
+                          </label>
+                        ) : (
+                          <span className="text-[11px] text-zinc-600">{t('chat.disabledForHighRisk')}</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {tools.length === 0 && (
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-500">
+                    {t('chat.noTools')}
+                  </div>
+                )}
               </div>
             </div>
 

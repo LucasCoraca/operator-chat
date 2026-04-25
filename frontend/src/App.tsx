@@ -26,6 +26,7 @@ interface Settings {
     showStats: boolean;
     selectedPersonality: string;
     selectedModel?: string;
+    defaultToolPreferences: Record<string, ToolPreference>;
   };
 }
 
@@ -71,6 +72,26 @@ interface Tool {
 interface ToolPreference {
   enabled: boolean;
   autoApprove: boolean;
+}
+
+function prioritizeSelectedModel(models: string[], selectedModel?: string) {
+  if (!selectedModel || !models.includes(selectedModel)) {
+    return models;
+  }
+
+  return [selectedModel, ...models.filter((model) => model !== selectedModel)];
+}
+
+function getChatNameFromQuery(query: string): string {
+  const normalized = query.replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return 'New Chat';
+  }
+
+  const maxLength = 80;
+  return normalized.length > maxLength
+    ? `${normalized.slice(0, maxLength - 1).trimEnd()}…`
+    : normalized;
 }
 
 function groupChatsByDate(chats: Chat[]) {
@@ -148,11 +169,11 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   
   // All state hooks must be called before any conditional returns
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [socketAuthenticated, setSocketAuthenticated] = useState(false);
   const [settings, setSettings] = useState<Settings>({
     ui: {
       showStats: false,
       selectedPersonality: 'professional',
+      defaultToolPreferences: {},
     },
   });
   const [chats, setChats] = useState<Chat[]>([]);
@@ -198,18 +219,59 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
     : enabledLandingTools.length === landingTools.length
       ? 'All tools'
       : `${enabledLandingTools.length} tool${enabledLandingTools.length === 1 ? '' : 's'}`;
+  const currentModel = settings.ui.selectedModel && models.includes(settings.ui.selectedModel)
+    ? settings.ui.selectedModel
+    : (models[0] ?? '');
+
+  const handleUnauthorized = () => {
+    authService.clearAuth();
+    setChats([]);
+    setSearchResults([]);
+    setPersonalities([]);
+    setCustomPersonalities([]);
+    setLandingTools([]);
+    setLandingToolPreferences({});
+    setCurrentChatId(null);
+    setCurrentSandboxId(null);
+    setInvalidChatId(false);
+    logout();
+  };
+
+  const parseJsonSafely = async (res: Response) => {
+    const text = await res.text();
+    if (!text) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
 
     fetch('/api/settings', { headers: authService.getAuthHeader() })
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (authService.isUnauthorizedResponse(res)) {
+          handleUnauthorized();
+          return null;
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP error ${res.status}`);
+        }
+        return res.json();
+      })
       .then((data) => {
+        if (!data) return;
         // Merge with defaults to ensure all properties exist
         setSettings({
           ui: {
             showStats: false,
             selectedPersonality: 'professional',
+            defaultToolPreferences: {},
             ...data.ui,
           },
         });
@@ -220,14 +282,38 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
     loadModels();
     loadPersonalities();
     fetch('/api/tools', { headers: authService.getAuthHeader() })
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (authService.isUnauthorizedResponse(res)) {
+          handleUnauthorized();
+          return null;
+        }
+        if (!res.ok) {
+          throw new Error(`HTTP error ${res.status}`);
+        }
+        return res.json();
+      })
       .then((data) => {
+        if (!data) return;
         const tools = Array.isArray(data) ? data : [];
         setLandingTools(tools);
-        setLandingToolPreferences(mergeToolPreferences(tools));
+        setLandingToolPreferences(mergeToolPreferences(tools, settings.ui.defaultToolPreferences));
       })
       .catch(console.error);
   }, [user]);
+
+  useEffect(() => {
+    setModels((currentModels) => prioritizeSelectedModel(currentModels, settings.ui.selectedModel));
+  }, [settings.ui.selectedModel]);
+
+  useEffect(() => {
+    if (landingTools.length === 0) {
+      return;
+    }
+
+    setLandingToolPreferences(
+      mergeToolPreferences(landingTools, settings.ui.defaultToolPreferences)
+    );
+  }, [landingTools, settings.ui.defaultToolPreferences]);
 
   useEffect(() => {
     if (!token) return;
@@ -241,13 +327,11 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
     });
 
     newSocket.on('authenticated', () => {
-      setSocketAuthenticated(true);
       console.log('Socket authenticated successfully');
     });
 
     newSocket.on('error', (error) => {
       console.error('Socket authentication error:', error);
-      setSocketAuthenticated(false);
     });
 
     setSocket(newSocket);
@@ -258,22 +342,6 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       newSocket.close();
     };
   }, [token]);
-
-  useEffect(() => {
-    if (!socket || !currentChatId || !socketAuthenticated) return;
-
-    socket.emit('join-chat', currentChatId);
-
-    const onChatNameUpdated = (data: { name: string }) => {
-      updateChatName(currentChatId, data.name);
-    };
-
-    socket.on('chat-name-updated', onChatNameUpdated);
-
-    return () => {
-      socket.off('chat-name-updated', onChatNameUpdated);
-    };
-  }, [socket, currentChatId]);
 
   useEffect(() => {
     if (!showLandingToolPicker) return;
@@ -340,10 +408,18 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const loadChats = async () => {
     try {
       const res = await fetch('/api/chat', { headers: authService.getAuthHeader() });
-      const data = await res.json();
-      setChats(data);
+      if (authService.isUnauthorizedResponse(res)) {
+        handleUnauthorized();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP error ${res.status}`);
+      }
+      const data = await parseJsonSafely(res);
+      setChats(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to load chats:', error);
+      setChats([]);
     }
   };
 
@@ -357,8 +433,15 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       const res = await fetch(`/api/chat/search?query=${encodeURIComponent(query)}`, {
         headers: authService.getAuthHeader()
       });
-      const data = await res.json();
-      setSearchResults(data);
+      if (authService.isUnauthorizedResponse(res)) {
+        handleUnauthorized();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP error ${res.status}`);
+      }
+      const data = await parseJsonSafely(res);
+      setSearchResults(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error('Failed to search chats:', error);
       setSearchResults([]);
@@ -378,14 +461,6 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const clearSearch = () => {
     setSearchQuery('');
     setSearchResults([]);
-  };
-
-  const updateChatName = (chatId: string, name: string) => {
-    setChats((prev) =>
-      prev.map((chat) =>
-        chat.id === chatId ? { ...chat, name, updatedAt: new Date().toISOString() } : chat
-      )
-    );
   };
 
   const toggleLandingTool = (toolName: string) => {
@@ -451,7 +526,17 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
         method: 'POST',
         headers: authService.getAuthHeader()
       });
-      const data = await res.json();
+      if (authService.isUnauthorizedResponse(res)) {
+        handleUnauthorized();
+        return;
+      }
+      if (!res.ok) {
+        throw new Error(`HTTP error ${res.status}`);
+      }
+      const data = await parseJsonSafely(res);
+      if (!data || typeof data !== 'object' || !('chatId' in data) || !('sandboxId' in data)) {
+        throw new Error('Invalid chat creation response');
+      }
       let nextInitialMessage = trimmedMessage;
 
       if (fileToUpload) {
@@ -463,10 +548,18 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
           headers: authService.getAuthHeader(),
           body: formData,
         });
-        const uploadData = await uploadRes.json();
+        if (authService.isUnauthorizedResponse(uploadRes)) {
+          handleUnauthorized();
+          return;
+        }
+        const uploadData = await parseJsonSafely(uploadRes);
 
-        if (!uploadData.success) {
-          throw new Error(uploadData.error || 'Upload failed');
+        if (!uploadRes.ok || !uploadData || typeof uploadData !== 'object' || !('success' in uploadData) || !uploadData.success) {
+          const errorMessage =
+            uploadData && typeof uploadData === 'object' && 'error' in uploadData
+              ? String(uploadData.error)
+              : 'Upload failed';
+          throw new Error(errorMessage);
         }
 
         const uploadNotification = `📁 File uploaded: ${uploadData.filename} (${(uploadData.size / 1024).toFixed(2)} KB)`;
@@ -479,7 +572,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
         id: data.chatId,
         sandboxId: data.sandboxId,
         messageCount: 0,
-        name: 'New Chat',
+        name: getChatNameFromQuery(trimmedMessage),
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -513,6 +606,20 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
     createChat(landingInput);
   };
 
+  const handleChatNameChange = (chatId: string, name: string) => {
+    setChats((prev) =>
+      prev.map((chat) =>
+        chat.id === chatId
+          ? {
+              ...chat,
+              name,
+              updatedAt: new Date().toISOString(),
+            }
+          : chat
+      )
+    );
+  };
+
   const handleLandingKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -543,11 +650,15 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const loadModels = async () => {
     try {
       const res = await fetch('/api/models', { headers: authService.getAuthHeader() });
+      if (authService.isUnauthorizedResponse(res)) {
+        handleUnauthorized();
+        return;
+      }
       if (!res.ok) {
         throw new Error(`HTTP error ${res.status}`);
       }
-      const data = await res.json();
-      setModels(Array.isArray(data) ? data : []);
+      const data = await parseJsonSafely(res);
+      setModels(prioritizeSelectedModel(Array.isArray(data) ? data : [], settings.ui.selectedModel));
     } catch (error) {
       console.error('Failed to load models:', error);
       setModels([]);
@@ -560,12 +671,23 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
         fetch('/api/personalities', { headers: authService.getAuthHeader() }),
         fetch('/api/personalities/custom', { headers: authService.getAuthHeader() })
       ]);
-      const builtIn = await builtInRes.json();
-      const custom = await customRes.json();
+      if (authService.isUnauthorizedResponse(builtInRes) || authService.isUnauthorizedResponse(customRes)) {
+        handleUnauthorized();
+        return;
+      }
+      if (!builtInRes.ok || !customRes.ok) {
+        throw new Error(`HTTP error ${builtInRes.status}/${customRes.status}`);
+      }
+      const [builtIn, custom] = await Promise.all([
+        parseJsonSafely(builtInRes),
+        parseJsonSafely(customRes),
+      ]);
       setPersonalities(Array.isArray(builtIn) ? builtIn : []);
       setCustomPersonalities(Array.isArray(custom) ? custom : []);
     } catch (error) {
       console.error('Failed to load personalities:', error);
+      setPersonalities([]);
+      setCustomPersonalities([]);
     }
   };
 
@@ -735,6 +857,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
               return true;
             });
           })()}
+          tools={landingTools}
           onManagePersonalities={handleManagePersonalities}
           isPersonalityManagerOpen={showPersonalityManager}
         />
@@ -955,7 +1078,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                       {currentChat?.name ?? 'Operator Chat'}
                     </div>
                     <div className="truncate text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-                      {models[0] ?? 'No model'}
+                      {currentModel || 'No model'}
                     </div>
                   </div>
                 </div>
@@ -970,7 +1093,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                     alt="Operator Chat logo"
                     className="size-8 object-contain"
                   />
-                  <span className="max-w-[10rem] truncate text-lg font-semibold text-zinc-100 md:max-w-[16rem]">{models[0] ?? 'No model'}</span>
+                  <span className="max-w-[10rem] truncate text-lg font-semibold text-zinc-100 md:max-w-[16rem]">{currentModel || 'No model'}</span>
                   <svg className="size-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
@@ -992,17 +1115,17 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                                 setShowModelDropdown(false);
                               }}
                               className={`w-full flex items-center gap-3 px-4 py-2 text-left text-sm transition-colors ${
-                                models[0] === model
+                                currentModel === model
                                   ? 'bg-brand/20 text-zinc-100'
                                   : 'text-zinc-300 hover:bg-surface-100'
                               }`}
                             >
-                              {models[0] === model && (
+                              {currentModel === model && (
                                 <svg className="size-4 text-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                                 </svg>
                               )}
-                              <span className={models[0] === model ? '' : 'ml-1'}>{model}</span>
+                              <span className={currentModel === model ? '' : 'ml-1'}>{model}</span>
                             </button>
                           ))
                         ) : (
@@ -1030,7 +1153,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                 className="flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-surface-100 md:hidden"
                 aria-label="Choose model"
               >
-                <span className="max-w-[6.5rem] truncate">{models[0] ?? 'No model'}</span>
+                <span className="max-w-[6.5rem] truncate">{currentModel || 'No model'}</span>
                 <svg className="size-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
@@ -1064,10 +1187,10 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                 socket={socket}
                 chatId={currentChatId}
                 sandboxId={currentSandboxId}
-                onChatNameUpdated={(name) => updateChatName(currentChatId, name)}
                 models={models}
-                currentModel={models[0] ?? ''}
+                currentModel={currentModel}
                 onModelChange={handleModelChange}
+                onChatNameChange={handleChatNameChange}
                 showStats={settings.ui.showStats}
               />
             </div>

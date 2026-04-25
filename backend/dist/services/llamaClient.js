@@ -44,16 +44,13 @@ class LlamaClient {
             });
         }
         const response = await this.client.chat.completions.create({
-            model: this.config.model,
+            model: options?.model || this.config.model || '',
             messages: safeMessages.map(msg => ({
                 role: msg.role,
                 content: msg.content,
                 ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
                 ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
             })),
-            temperature: options?.temperature ?? this.config.temperature,
-            max_tokens: options?.maxTokens ?? this.config.maxTokens,
-            top_p: this.config.topP,
             stream: false,
         });
         const message = response.choices[0]?.message;
@@ -61,7 +58,7 @@ class LlamaClient {
         return {
             content,
             stop: true,
-            model: this.config.model,
+            model: this.config.model || '',
             tokens_evaluated: response.usage?.prompt_tokens || 0,
             tokens_generated: response.usage?.completion_tokens || 0,
         };
@@ -80,16 +77,13 @@ class LlamaClient {
         return new Promise((resolve, reject) => {
             const streamStartTime = Date.now(); // Track start time for manual timing calculation
             const streamBody = {
-                model: this.config.model,
+                model: options?.model || this.config.model || '',
                 messages: safeMessages.map(msg => ({
                     role: msg.role,
                     content: msg.content,
                     ...(msg.tool_calls && { tool_calls: msg.tool_calls }),
                     ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
                 })),
-                temperature: this.config.temperature,
-                max_tokens: this.config.maxTokens,
-                top_p: this.config.topP,
                 stream: true,
             };
             // Add tools if provided
@@ -253,7 +247,7 @@ class LlamaClient {
             return response.data.map(m => m.id);
         }
         catch (e) {
-            return [this.config.model];
+            return this.config.model ? [this.config.model] : [];
         }
     }
 }

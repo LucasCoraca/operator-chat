@@ -87,6 +87,7 @@ export class SettingsRepository {
     return this.get('ui') || {
       showStats: false,
       selectedPersonality: 'professional',
+      defaultToolPreferences: {},
     };
   }
 

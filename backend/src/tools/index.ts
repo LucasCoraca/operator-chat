@@ -575,9 +575,25 @@ export class ToolRegistry {
   }
 
   mergeWithDefaultPreferences(
-    preferences?: Record<string, ChatToolPreference>
+    preferences?: Record<string, ChatToolPreference>,
+    defaultPreferences?: Record<string, ChatToolPreference>
   ): Record<string, ChatToolPreference> {
     const defaults = this.getDefaultPreferences();
+
+    if (defaultPreferences) {
+      for (const tool of this.getTools()) {
+        const storedDefault = defaultPreferences[tool.name];
+        if (storedDefault) {
+          defaults[tool.name] = {
+            enabled: storedDefault.enabled ?? defaults[tool.name].enabled,
+            autoApprove: tool.policy.supportsAutoApprove
+              ? storedDefault.autoApprove ?? defaults[tool.name].autoApprove
+              : false,
+          };
+        }
+      }
+    }
+
     if (!preferences) {
       return defaults;
     }

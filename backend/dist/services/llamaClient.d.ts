@@ -1,10 +1,10 @@
 export interface LlamaConfig {
     baseUrl: string;
     apiKey?: string;
-    model: string;
-    temperature: number;
-    maxTokens: number;
-    topP: number;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+    topP?: number;
     stopSequences?: string[];
 }
 export interface ChatMessage {
@@ -70,10 +70,12 @@ export declare class LlamaClient {
         temperature?: number;
         maxTokens?: number;
         excludeReasoning?: boolean;
+        model?: string;
     }, onToken?: (token: string) => void): Promise<ChatResponse>;
     chatStream(messages: ChatMessage[], onDone?: (timings?: ChatTimings) => void, abortController?: AbortController, tools?: ToolDefinition[], options?: {
         onReasoningToken?: (token: string) => void;
         onContentToken?: (token: string) => void;
+        model?: string;
     }): Promise<ChatStreamResult>;
     getModels(): Promise<string[]>;
 }

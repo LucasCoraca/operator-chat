@@ -695,7 +695,7 @@ You are in RESEARCH_MODE.
 - On the final research turn, call \`${TRANSITION_TO_COMPOSE_TOOL}\` immediately. Do not answer in prose.
 
 ## SOURCE CITATION REQUIREMENT
-When you use web_search or browser_visit tools, cite sources in your final response with URL and title/description.
+When you use web_search or browser_visit tools, you must it is imperative to do so cite sources in your final response with URL and title/description.
 
 Format citations like this at the end of your answer:
 
@@ -734,6 +734,14 @@ You are in COMPOSE_REPLY_MODE.
 - Do not call tools.
 - Synthesize the best final answer from gathered observations.
 - Output the final answer as normal assistant text.
+
+## SOURCE CITATION REQUIREMENT
+When you use web_search or browser_visit tools, you must it is imperative to do so cite sources in your final response.
+
+Always use inline sources like this: "[Source Name](URL), ..."
+
+This is REQUIRED for any factual claims, statistics, news, or information obtained from web searches or browsing.
+
 ` : ''}
 
 Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning}`;

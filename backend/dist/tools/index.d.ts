@@ -43,7 +43,7 @@ export declare class ToolRegistry {
     getTool(name: string): Tool | undefined;
     getToolPolicy(name: string): ToolExecutionPolicy | undefined;
     getDefaultPreferences(): Record<string, ChatToolPreference>;
-    mergeWithDefaultPreferences(preferences?: Record<string, ChatToolPreference>): Record<string, ChatToolPreference>;
+    mergeWithDefaultPreferences(preferences?: Record<string, ChatToolPreference>, defaultPreferences?: Record<string, ChatToolPreference>): Record<string, ChatToolPreference>;
     executeTool(name: string, args: Record<string, any>, context: {
         sandboxId: string;
         userId: string;

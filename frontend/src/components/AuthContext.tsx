@@ -20,11 +20,39 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   useEffect(() => {
     const storedUser = authService.getCurrentUser();
     const storedToken = authService.getToken();
-    if (storedUser && storedToken) {
-      setUser(storedUser);
-      setToken(storedToken);
-    }
-    setIsLoading(false);
+
+    const validateStoredSession = async () => {
+      if (!storedUser || !storedToken) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/auth/me', {
+          headers: authService.getAuthHeader(),
+        });
+
+        if (!response.ok) {
+          authService.clearAuth();
+          setUser(null);
+          setToken(null);
+          setIsLoading(false);
+          return;
+        }
+
+        const data = await response.json();
+        setUser({ id: data.id, username: data.username });
+        setToken(storedToken);
+      } catch (error) {
+        authService.clearAuth();
+        setUser(null);
+        setToken(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    validateStoredSession();
   }, []);
 
   const login = async (username: string, password: string) => {

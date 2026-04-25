@@ -1,6 +1,10 @@
 import { query, queryOne, execute } from '../db';
 import crypto from 'crypto';
 
+function toMysqlDateTime(date: Date = new Date()): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 export interface Memory {
   id: string;
   user_id: string;
@@ -35,7 +39,7 @@ export class MemoryRepository {
 
   async create(input: CreateMemoryInput): Promise<Memory> {
     const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const now = toMysqlDateTime();
     
     await execute(
       `INSERT INTO memories (id, user_id, content, tags, created_at, updated_at)
@@ -71,7 +75,7 @@ export class MemoryRepository {
     if (fields.length === 0) return this.findById(id);
 
     fields.push('updated_at = ?');
-    values.push(new Date().toISOString());
+    values.push(toMysqlDateTime());
     values.push(id);
     values.push(userId);
 

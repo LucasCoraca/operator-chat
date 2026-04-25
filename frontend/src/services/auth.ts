@@ -62,6 +62,8 @@ export const logout = () => {
   localStorage.removeItem('token');
 };
 
+export const clearAuth = logout;
+
 export const getCurrentUser = (): User | null => {
   const user = localStorage.getItem('user');
   return user ? JSON.parse(user) : null;
@@ -74,4 +76,8 @@ export const getToken = (): string | null => {
 export const getAuthHeader = (): Record<string, string> => {
   const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+export const isUnauthorizedResponse = (response: Response): boolean => {
+  return response.status === 401;
 };

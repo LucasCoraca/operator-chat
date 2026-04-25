@@ -2,6 +2,10 @@ import { query, queryOne, execute, transaction } from '../db';
 import crypto from 'crypto';
 import { PoolConnection } from 'mysql2/promise';
 
+function toMysqlDateTime(date: Date = new Date()): string {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 export interface Chat {
   id: string;
   user_id: string;
@@ -26,6 +30,7 @@ export interface ChatMessage {
 }
 
 export interface CreateChatInput {
+  id?: string;
   userId: string;
   sandboxId: string;
   name?: string;
@@ -52,6 +57,10 @@ export interface ChatSummary {
 }
 
 export class ChatRepository {
+  async findAll(): Promise<Chat[]> {
+    return query<Chat>('SELECT * FROM chats ORDER BY updated_at DESC');
+  }
+
   async findById(id: string): Promise<Chat | null> {
     return queryOne<Chat>('SELECT * FROM chats WHERE id = ?', [id]);
   }
@@ -70,8 +79,8 @@ export class ChatRepository {
   }
 
   async create(input: CreateChatInput): Promise<Chat> {
-    const id = crypto.randomUUID();
-    const now = new Date().toISOString();
+    const id = input.id || crypto.randomUUID();
+    const now = toMysqlDateTime();
     
     await execute(
       `INSERT INTO chats (id, user_id, sandbox_id, name, tool_preferences, approval_mode, created_at, updated_at)
@@ -117,7 +126,7 @@ export class ChatRepository {
     if (fields.length === 0) return this.findById(id);
 
     fields.push('updated_at = ?');
-    values.push(new Date().toISOString());
+    values.push(toMysqlDateTime());
     values.push(id);
 
     await execute(
@@ -165,7 +174,7 @@ export class ChatRepository {
     // Update chat's updated_at
     await execute(
       'UPDATE chats SET updated_at = ? WHERE id = ?',
-      [new Date().toISOString(), input.chatId]
+      [toMysqlDateTime(), input.chatId]
     );
 
     const message = await queryOne<ChatMessage>('SELECT * FROM chat_messages WHERE id = ?', [id]);
