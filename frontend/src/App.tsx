@@ -573,7 +573,11 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       }
       const res = await fetch('/api/chat', { 
         method: 'POST',
-        headers: authService.getAuthHeader()
+        headers: {
+          ...authService.getAuthHeader(),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ toolPreferences: landingToolPreferences }),
       });
       if (authService.isUnauthorizedResponse(res)) {
         handleUnauthorized();

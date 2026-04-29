@@ -5,6 +5,10 @@ import i18n from '../i18n';
 import { Socket } from 'socket.io-client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import type { PluggableList } from 'unified';
+import 'katex/dist/katex.min.css';
 import { getAuthHeader } from '../services/auth';
 import { generateUUID } from '../utils/uuid';
 import CodeBlock, { PreBlock } from './CodeBlock';
@@ -141,6 +145,9 @@ function normalizeAgentSteps(steps: AgentStep[], hasResolvedAssistantResponse: b
 
 // Virtual scrolling configuration
 const SCROLL_THRESHOLD = 300; // Pixels from bottom to show jump button
+const markdownRemarkPlugins: PluggableList = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]];
+const markdownRehypePlugins: PluggableList = [rehypeKatex];
+const markdownComponents = { code: CodeBlock, pre: PreBlock };
 
 function getChatNameFromQuery(query: string): string {
   const normalized = query.replace(/\s+/g, ' ').trim();
@@ -181,6 +188,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [highlightedMessage, setHighlightedMessage] = useState<number | null>(null);
   const [availableTools, setAvailableTools] = useState<Tool[]>([]);
   const [toolPreferences, setToolPreferences] = useState<Record<string, ToolPreference>>({});
+  const [toolsLoaded, setToolsLoaded] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>({ alwaysApprove: false });
   const [showToolPicker, setShowToolPicker] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
@@ -718,6 +726,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
   useEffect(() => {
     let isActive = true;
+    setToolsLoaded(false);
 
     const loadTools = async () => {
       try {
@@ -735,11 +744,13 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         const prefsData = await prefsRes.json();
         if (!isActive) return;
         setToolPreferences(mergeToolPreferences(tools, prefsData.toolPreferences));
+        setToolsLoaded(true);
       } catch (error) {
         if (!isActive) return;
         console.error('Failed to load tools:', error);
         setAvailableTools([]);
         setToolPreferences({});
+        setToolsLoaded(true);
       }
     };
 
@@ -868,7 +879,13 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
   }, [input]);
 
-  const sendMessageContent = useCallback((message: string) => {
+  const sendMessageContent = useCallback((
+    message: string,
+    overrides?: {
+      toolPreferences?: Record<string, ToolPreference>;
+      reasoningEffort?: 'low' | 'medium' | 'high';
+    }
+  ) => {
     if (!message.trim() || !socket) return false;
     if (!messagesRef.current.some((existingMessage) => existingMessage.role === 'user')) {
       onChatNameChange(chatId, getChatNameFromQuery(message));
@@ -886,21 +903,43 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       setTokenCount(0);
     }
     const language = i18n.language || 'en';
-    socket.emit('send-message', { chatId, message: message.trim(), model: currentModel, toolPreferences, approvalMode, language, reasoningEffort });
+    socket.emit('send-message', {
+      chatId,
+      message: message.trim(),
+      model: currentModel,
+      toolPreferences: overrides?.toolPreferences ?? toolPreferences,
+      approvalMode,
+      language,
+      reasoningEffort: overrides?.reasoningEffort ?? reasoningEffort,
+    });
     return true;
   }, [approvalMode, chatId, currentModel, onChatNameChange, showStats, socket, toolPreferences, reasoningEffort]);
 
   useEffect(() => {
     const initialMessage = initialRouteState?.initialMessage;
     if (!initialMessage || !socket || initialMessageSentRef.current) return;
-    if (availableTools.length > 0 && Object.keys(toolPreferences).length === 0) return;
+    if (!toolsLoaded) return;
 
-    const sent = sendMessageContent(initialMessage);
+    const initialToolPreferences = initialRouteState?.initialToolPreferences
+      ? mergeToolPreferences(availableTools, initialRouteState.initialToolPreferences)
+      : toolPreferences;
+    if (availableTools.length > 0 && Object.keys(initialToolPreferences).length === 0) return;
+
+    setToolPreferences((current) =>
+      JSON.stringify(current) === JSON.stringify(initialToolPreferences)
+        ? current
+        : initialToolPreferences
+    );
+
+    const sent = sendMessageContent(initialMessage, {
+      toolPreferences: initialToolPreferences,
+      reasoningEffort: initialRouteState?.reasoningEffort,
+    });
     if (!sent) return;
 
     initialMessageSentRef.current = true;
     navigate(location.pathname, { replace: true, state: null });
-  }, [availableTools.length, initialRouteState, location.pathname, navigate, sendMessageContent, socket, toolPreferences]);
+  }, [availableTools, initialRouteState, location.pathname, mergeToolPreferences, navigate, sendMessageContent, socket, toolPreferences, toolsLoaded]);
 
 
   const startEditing = (idx: number, content: string) => {
@@ -1278,7 +1317,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           </div>
           {rest ? (
             <div className="mt-2 text-sm text-zinc-300">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>
+              <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
                 {rest}
               </ReactMarkdown>
             </div>
@@ -1290,7 +1329,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     return (
       <div className="mt-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
         <div className="text-sm prose prose-invert max-w-none">
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>
+          <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
             {trimmed}
           </ReactMarkdown>
         </div>
@@ -1304,7 +1343,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         <div key={idx} className="rounded-2xl border border-white/5 bg-black/20 p-3">
           <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.thought')}</span>
           <div className="mt-3 text-sm prose prose-invert max-w-none text-zinc-300">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>{step.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{step.content}</ReactMarkdown>
           </div>
         </div>
       );
@@ -1352,7 +1391,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         <div key={idx} className="border-l-2 border-purple-500/50 pl-3 py-2">
           <span className="text-purple-400 font-medium text-xs uppercase tracking-wide">{t('chat.finalAnswer')}</span>
           <div className="text-zinc-100 mt-1 prose prose-invert max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>{step.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{step.content}</ReactMarkdown>
           </div>
         </div>
       );
@@ -1410,7 +1449,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               <div className="relative max-h-[3.75rem] overflow-hidden">
                 <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent via-[rgba(24,24,27,0.45)] to-[rgba(24,24,27,0.92)] pointer-events-none z-10" />
                 <div className="text-zinc-400 text-xs">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>{truncatedContent}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{truncatedContent}</ReactMarkdown>
                 </div>
               </div>
             </div>
@@ -1436,7 +1475,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             <div className="rounded-2xl border border-white/5 bg-black/20 p-3">
               <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.thought')}</span>
               <div className="mt-3 text-sm prose prose-invert max-w-none text-zinc-300">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>{streamingThoughtContent}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{streamingThoughtContent}</ReactMarkdown>
                 <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-zinc-400" />
               </div>
             </div>
@@ -1445,7 +1484,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             <div className="rounded-2xl border border-white/5 bg-black/20 p-3">
               <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.observation')}</span>
               <div className="mt-3 text-sm prose prose-invert max-w-none text-zinc-300">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>{streamingContent}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{streamingContent}</ReactMarkdown>
                 <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-zinc-400" />
               </div>
             </div>
@@ -1512,7 +1551,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                     </div>
                   )}
                   <div className="prose prose-invert max-w-full break-words min-w-0">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: CodeBlock, pre: PreBlock }}>{msg.content}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown>
                   </div>
                   {!assistantModel && !msg.content && processingMessageIndex !== null && idx === processingMessageIndex + 1 && (
                     <div className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">

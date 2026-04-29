@@ -968,6 +968,7 @@ app.post('/api/chat', protect, (req: AuthRequest, res) => {
   const sandbox = sandboxManager.createSandbox();
   const now = new Date().toISOString();
   const userId = req.user!.id;
+  const { toolPreferences } = req.body ?? {};
 
   const session: ChatSession = {
     id: chatId,
@@ -977,7 +978,7 @@ app.post('/api/chat', protect, (req: AuthRequest, res) => {
     name: 'New Conversation',
     createdAt: now,
     updatedAt: now,
-    toolPreferences: normalizeToolPreferences(),
+    toolPreferences: normalizeToolPreferences(toolPreferences),
     approvalMode: {
       alwaysApprove: false,
     },

@@ -156,6 +156,14 @@
   @apply border-white/10 my-4;
 }
 
+.prose .katex-display {
+  @apply my-4 overflow-x-auto overflow-y-hidden py-1;
+}
+
+.prose .katex {
+  color: inherit;
+}
+
 /* Line clamp utility for search snippets */
 .line-clamp-2 {
   display: -webkit-box;
