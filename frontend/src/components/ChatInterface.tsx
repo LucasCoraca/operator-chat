@@ -1585,10 +1585,49 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     return entries;
   };
 
-  const renderTerminalOutput = (output?: string) => {
+  const formatCommandTerminalOutput = (output: string) => {
+    const normalized = output
+      .split('\n')
+      .filter((line) => !line.includes('Warning: Permanently added') || !line.includes('known hosts'))
+      .join('\n')
+      .trimEnd();
+
+    const stdoutMatch = normalized.match(/(?:^|\n)STDOUT:\n([\s\S]*?)(?=\nSTDERR:\n|$)/);
+    const stderrMatch = normalized.match(/(?:^|\n)STDERR:\n([\s\S]*?)$/);
+    const stdout = stdoutMatch?.[1]?.trimEnd() || '';
+    const stderr = stderrMatch?.[1]?.trimEnd() || '';
+
+    if (stdout || stderr) {
+      return [stdout, stderr].filter(Boolean).join('\n');
+    }
+
+    if (normalized.includes('Status: still running in background terminal')) {
+      return normalized
+        .split('\n')
+        .filter((line) => (
+          line.startsWith('Status:') ||
+          line.startsWith('PID:') ||
+          line.startsWith('Use terminal_') ||
+          line.startsWith('__OPERATOR_CHAT_BACKGROUND__')
+        ))
+        .join('\n');
+    }
+
+    if (normalized.includes('(no output)')) {
+      return '';
+    }
+
+    return normalized
+      .split('\n')
+      .filter((line) => !/^(Command|Workspace|Exit code|Duration):/.test(line.trim()))
+      .join('\n')
+      .trimEnd();
+  };
+
+  const renderTerminalOutput = (output?: string, type?: AgentTerminalEntry['type']) => {
     if (!output) return null;
 
-    const normalized = output
+    const normalized = (type === 'command' ? formatCommandTerminalOutput(output) : output)
       .split('\n')
       .filter((line) => !line.includes('Warning: Permanently added') || !line.includes('known hosts'))
       .join('\n')
@@ -1636,7 +1675,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               .join('\n') || entry.title}
           </div>
         )}
-        {renderTerminalOutput(entry.output)}
+        {renderTerminalOutput(entry.output, entry.type)}
       </div>
     );
   };

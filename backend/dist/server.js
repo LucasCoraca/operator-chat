@@ -350,9 +350,30 @@ function normalizeWorkspaceConfig(input) {
     };
 }
 const chatSessions = new Map();
+const pendingChatSaveTimers = new Map();
 const pendingApprovals = new Map();
 const MAX_PERSISTED_STEP_CONTENT_CHARS = 20000;
 const MAX_PERSISTED_PARTIAL_ANSWER_CHARS = 100000;
+function scheduleChatSave(session, delayMs = 750) {
+    const existingTimer = pendingChatSaveTimers.get(session.id);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+        pendingChatSaveTimers.delete(session.id);
+        void saveChat(session).catch(console.error);
+    }, delayMs);
+    timer.unref?.();
+    pendingChatSaveTimers.set(session.id, timer);
+}
+async function flushScheduledChatSave(session) {
+    const existingTimer = pendingChatSaveTimers.get(session.id);
+    if (existingTimer) {
+        clearTimeout(existingTimer);
+        pendingChatSaveTimers.delete(session.id);
+    }
+    await saveChat(session);
+}
 function truncateForPersistence(content, maxLength) {
     if (content === undefined || content.length <= maxLength) {
         return content;
@@ -467,6 +488,8 @@ async function loadChats() {
             const result = await repositories_1.chatRepository.getWithMessages(chat.id);
             if (result) {
                 const { chat: persistedChat, messages } = result;
+                const persistedAgentState = sanitizeAgentStateForPersistence(persistedChat.agent_state);
+                const parsedPersistedAgentState = parseJsonIfNeeded(persistedChat.agent_state);
                 const session = {
                     id: persistedChat.id,
                     userId: persistedChat.user_id,
@@ -482,10 +505,10 @@ async function loadChats() {
                     name: persistedChat.name,
                     createdAt: persistedChat.created_at.toISOString(),
                     updatedAt: persistedChat.updated_at.toISOString(),
-                    agentState: sanitizeAgentStateForPersistence(persistedChat.agent_state),
+                    agentState: persistedAgentState,
                     toolPreferences: persistedChat.tool_preferences || {},
                     approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
-                    agentRuns: sanitizeAgentRunsForPersistence(persistedChat.agent_state?.agentRuns),
+                    agentRuns: sanitizeAgentRunsForPersistence(parsedPersistedAgentState?.agentRuns),
                 };
                 const sessionChanged = normalizeChatSession(session);
                 chatSessions.set(persistedChat.id, session);
@@ -523,6 +546,12 @@ async function saveChat(session) {
                 name: session.name,
                 toolPreferences: session.toolPreferences,
                 approvalMode: session.approvalMode,
+            });
+            await repositories_1.chatRepository.update(session.id, {
+                agent_state: {
+                    ...sanitizeAgentStateForPersistence(session.agentState),
+                    agentRuns: sanitizeAgentRunsForPersistence(session.agentRuns),
+                },
             });
         }
         // Sync messages
@@ -883,6 +912,7 @@ async function startChatAgentRun(session, userId, request, model, language, sour
             run.finalAnswer = `${run.finalAnswer || ''}${token}`;
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            scheduleChatSave(session);
         },
         onReasoningToken: () => { },
         onError: (error) => {
@@ -890,6 +920,7 @@ async function startChatAgentRun(session, userId, request, model, language, sour
             run.error = error;
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            scheduleChatSave(session, 0);
         },
         onToolApprovalRequest: async (approvalRequest) => {
             if (loadedSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
@@ -912,14 +943,14 @@ async function startChatAgentRun(session, userId, request, model, language, sour
             run.status = result.isComplete ? 'completed' : 'failed';
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            await saveChat(session);
+            await flushScheduledChatSave(session);
         }
         catch (error) {
             run.status = 'failed';
             run.error = error instanceof Error ? error.message : String(error);
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            await saveChat(session);
+            await flushScheduledChatSave(session);
         }
         finally {
             clearPendingApprovalsForChat(sourceSocketChatId);
