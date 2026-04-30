@@ -38,6 +38,32 @@ interface ChatMessage {
   content: string;
   model?: string;
   agentSteps?: AgentStep[];
+  agentRunId?: string;
+}
+
+interface AgentRun {
+  id: string;
+  chatId: string;
+  title: string;
+  prompt: string;
+  workspaceRoot: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  steps: AgentStep[];
+  finalAnswer: string | null;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  model?: string;
+}
+
+interface AgentTerminalEntry {
+  id: string;
+  type: 'command' | 'tool' | 'thought' | 'system' | 'final';
+  title: string;
+  command?: string;
+  args?: Record<string, any>;
+  output?: string;
+  status: 'running' | 'completed';
 }
 
 interface FinalAnswerTokenPayload {
@@ -96,6 +122,14 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   model?: string;
+  agentRunId?: string;
+}
+
+function getAgentRunIdFromMessage(message: Pick<Message, 'content' | 'agentRunId'>) {
+  return message.agentRunId
+    || (message.content.startsWith('__operator_agent_run__:')
+      ? message.content.slice('__operator_agent_run__:'.length).trim()
+      : undefined);
 }
 
 function isInvalidAgentObservation(step: AgentStep) {
@@ -193,6 +227,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [showToolPicker, setShowToolPicker] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
+  const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -202,6 +237,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const distanceFromBottomRef = useRef(0);
   const toolPickerRef = useRef<HTMLDivElement>(null);
+  const agentTerminalRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   
   // Refs for socket event handlers to avoid re-registering callbacks
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -291,6 +327,15 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
   }, []);
 
+  useEffect(() => {
+    for (const [runId, element] of agentTerminalRefs.current.entries()) {
+      if (!element) continue;
+      const run = agentRuns[runId];
+      if (!run || run.status !== 'running') continue;
+      element.scrollTop = element.scrollHeight;
+    }
+  }, [agentRuns]);
+
   // Socket event handlers - use refs to avoid re-registering callbacks
   useEffect(() => {
     if (!socket) return;
@@ -320,6 +365,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       } else {
         setMessages((prev) => {
           const updated = [...prev];
+          const agentRunId = getAgentRunIdFromMessage(data);
+          if (agentRunId) {
+            const alreadyExists = updated.some((message) => getAgentRunIdFromMessage(message) === agentRunId);
+            return alreadyExists
+              ? updated
+              : [...updated, { ...data, agentRunId, model: data.model ?? currentModel, id: generateUUID(), agentSteps: [] }];
+          }
+
           const persistedSteps = appendPendingThoughtToSteps(currentAgentStepsRef.current);
           currentAgentStepsRef.current = persistedSteps;
           for (let i = updated.length - 1; i >= 0; i--) {
@@ -328,15 +381,19 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               break;
             }
           }
-          // Check if an assistant message already exists (created during streaming)
-          let existingAssistantIndex = -1;
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === 'assistant') {
-              existingAssistantIndex = i;
-              break;
+          const targetUserIndex = processingMessageIndex ?? (() => {
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === 'user') return i;
             }
-          }
-          // If assistant message exists, update it with the server's content
+            return -1;
+          })();
+          const nextMessageIndex = targetUserIndex >= 0 ? targetUserIndex + 1 : -1;
+          const existingAssistantIndex = nextMessageIndex >= 0
+            && updated[nextMessageIndex]?.role === 'assistant'
+            && !getAgentRunIdFromMessage(updated[nextMessageIndex])
+              ? nextMessageIndex
+              : -1;
+
           if (existingAssistantIndex >= 0) {
             updated[existingAssistantIndex] = { ...updated[existingAssistantIndex], ...data, agentSteps: [] };
           } else {
@@ -412,7 +469,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
         if (targetUserIndex !== -1) {
           const nextMessage = updated[targetUserIndex + 1];
-          if (nextMessage?.role === 'assistant') {
+          if (nextMessage?.role === 'assistant' && !getAgentRunIdFromMessage(nextMessage)) {
             updated[targetUserIndex + 1] = {
               ...nextMessage,
               content: nextMessage.content + token,
@@ -540,6 +597,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       setToolPreferences((current) => mergeToolPreferences(availableTools, { ...current, ...data.toolPreferences }));
     };
 
+    const handleAgentRuns = (runs: AgentRun[]) => {
+      setAgentRuns(Object.fromEntries(runs.map((run) => [run.id, run])));
+    };
+
+    const handleAgentRunUpdated = (run: AgentRun) => {
+      setAgentRuns((current) => ({ ...current, [run.id]: run }));
+    };
+
     const handleStepSaved = (data: { step: AgentStep; allSteps: AgentStep[] }) => {
       // Update current agent steps when a step is saved
       setCurrentAgentSteps(data.allSteps);
@@ -612,6 +677,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     socket.on('tool-approval-required', handleToolApprovalRequired);
     socket.on('tool-approval-resolved', handleToolApprovalResolved);
     socket.on('tool-preferences-updated', handleToolPreferencesUpdated);
+    socket.on('agent-runs', handleAgentRuns);
+    socket.on('agent-run-updated', handleAgentRunUpdated);
     socket.on('step-saved', handleStepSaved);
 
     // Join the chat room AFTER handlers are registered
@@ -631,6 +698,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       socket.off('tool-approval-required', handleToolApprovalRequired);
       socket.off('tool-approval-resolved', handleToolApprovalResolved);
       socket.off('tool-preferences-updated', handleToolPreferencesUpdated);
+      socket.off('agent-runs', handleAgentRuns);
+      socket.off('agent-run-updated', handleAgentRunUpdated);
       socket.off('step-saved', handleStepSaved);
     };
   }, [appendPendingThoughtToSteps, availableTools, chatId, currentModel, mergeToolPreferences, processingMessageIndex, socket]);
@@ -653,6 +722,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           hasAgentState: !!(data.agentState && data.agentState.steps && data.agentState.steps.length > 0),
           isComplete: data.agentState?.isComplete,
         });
+
+        if (data.agentRuns) {
+          const runs = Array.isArray(data.agentRuns) ? data.agentRuns as AgentRun[] : [];
+          setAgentRuns(Object.fromEntries(runs.map((run) => [run.id, run])));
+        }
 
         if (data.messages) {
           // Check if there's an ongoing response BEFORE setting messages state
@@ -831,17 +905,21 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
   }, [chatId, searchParams]);
 
-  // Auto-scroll to bottom on new messages (only if already at bottom)
+  // Auto-scroll to bottom on new messages and live agent updates (only if already near bottom)
   useEffect(() => {
     if (!scrollContainerRef.current) return;
-    
-    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
-    const isNearBottom = scrollHeight - scrollTop - clientHeight < 300;
+    const isNearBottom = distanceFromBottomRef.current < SCROLL_THRESHOLD;
     
     if (isNearBottom) {
-      scrollContainerRef.current.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: 'smooth' });
+      requestAnimationFrame(() => {
+        if (!scrollContainerRef.current) return;
+        scrollContainerRef.current.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: 'smooth' });
+        if (jumpButtonRef.current) {
+          jumpButtonRef.current.style.display = 'none';
+        }
+      });
     }
-  }, [messages]);
+  }, [messages, agentRuns]);
 
   // Update refs when state changes
   useEffect(() => {
@@ -1399,6 +1477,237 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     return null;
   };
 
+  const getTerminalCommand = (step: AgentStep) => {
+    if (step.actionName === 'bash' && typeof step.actionArgs?.command === 'string') {
+      return step.actionArgs.command;
+    }
+    if (step.actionName === 'read' && typeof step.actionArgs?.path === 'string') {
+      return `read ${step.actionArgs.path}`;
+    }
+    if (step.actionName === 'write' && typeof step.actionArgs?.path === 'string') {
+      return `write ${step.actionArgs.path}`;
+    }
+    if (step.actionName === 'edit' && typeof step.actionArgs?.path === 'string') {
+      return `edit ${step.actionArgs.path}`;
+    }
+    if (step.actionName === 'apply_patch') {
+      return 'apply_patch';
+    }
+    if (step.actionName === 'grep' && typeof step.actionArgs?.pattern === 'string') {
+      return `grep ${step.actionArgs.pattern}`;
+    }
+    if (step.actionName === 'glob' && typeof step.actionArgs?.pattern === 'string') {
+      return `glob ${step.actionArgs.pattern}`;
+    }
+    if (step.actionName === 'list') {
+      return `list ${typeof step.actionArgs?.path === 'string' ? step.actionArgs.path : '.'}`;
+    }
+    return step.actionName || 'tool';
+  };
+
+  const buildAgentTerminalEntries = (steps: AgentStep[]): AgentTerminalEntry[] => {
+    const entries: AgentTerminalEntry[] = [];
+    let pendingActionIndex: number | null = null;
+    const shouldHideObservation = (content: string) => {
+      const trimmed = content.trim();
+      return trimmed.startsWith('Invalid agent turn:') ||
+        trimmed.startsWith('Awaiting user approval for tool') ||
+        trimmed.startsWith('__agent_run_started__:') ||
+        trimmed.startsWith('## RESEARCH PHASE COMPLETE') ||
+        trimmed.startsWith('## COMPOSING FINAL ANSWER') ||
+        trimmed.startsWith('## ITERATION LIMIT REACHED');
+    };
+
+    for (const step of steps) {
+      if (step.type === 'action') {
+        const id = `${entries.length}-${step.actionName || 'tool'}`;
+        entries.push({
+          id,
+          type: step.actionName === 'bash' ? 'command' : 'tool',
+          title: step.actionName || 'tool',
+          command: getTerminalCommand(step),
+          args: step.actionArgs,
+          status: 'running',
+        });
+        pendingActionIndex = entries.length - 1;
+        continue;
+      }
+
+      if (step.type === 'observation' && pendingActionIndex !== null) {
+        if (shouldHideObservation(step.content)) {
+          entries.splice(pendingActionIndex, 1);
+          pendingActionIndex = null;
+          continue;
+        }
+        entries[pendingActionIndex] = {
+          ...entries[pendingActionIndex],
+          output: step.content,
+          status: 'completed',
+        };
+        pendingActionIndex = null;
+        continue;
+      }
+
+      if (step.type === 'observation') {
+        if (shouldHideObservation(step.content)) {
+          continue;
+        }
+        entries.push({
+          id: `${entries.length}-observation`,
+          type: 'system',
+          title: 'observation',
+          output: step.content,
+          status: 'completed',
+        });
+        continue;
+      }
+
+      if (step.type === 'thought') {
+        entries.push({
+          id: `${entries.length}-thought`,
+          type: 'thought',
+          title: 'thought',
+          output: step.content,
+          status: 'completed',
+        });
+        continue;
+      }
+
+      if (step.type === 'mode_transition') {
+        continue;
+      }
+
+      if (step.type === 'final_answer') {
+        continue;
+      }
+    }
+
+    return entries;
+  };
+
+  const renderTerminalOutput = (output?: string) => {
+    if (!output) return null;
+
+    const normalized = output
+      .split('\n')
+      .filter((line) => !line.includes('Warning: Permanently added') || !line.includes('known hosts'))
+      .join('\n')
+      .trimEnd();
+    if (!normalized) return null;
+    const lines = normalized.split('\n');
+    const visible = lines.length > 240 ? lines.slice(-240) : lines;
+
+    return (
+      <pre className="mt-2 max-h-[26rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
+        {lines.length > visible.length ? `[showing last ${visible.length} of ${lines.length} lines]\n` : ''}
+        {visible.join('\n')}
+      </pre>
+    );
+  };
+
+  const renderTerminalEntry = (entry: AgentTerminalEntry) => {
+    const accent = entry.type === 'command'
+      ? 'text-emerald-300'
+      : entry.type === 'tool'
+        ? 'text-sky-300'
+        : entry.type === 'thought'
+          ? 'text-purple-300'
+          : entry.type === 'final'
+            ? 'text-emerald-200'
+            : 'text-zinc-300';
+
+    return (
+      <div key={entry.id} className="border-b border-white/5 px-4 py-3 last:border-b-0">
+        <div className="flex min-w-0 items-center gap-2 font-mono text-xs">
+          <span className={accent}>$</span>
+          <span className="min-w-0 flex-1 truncate text-zinc-100">{entry.command || entry.title}</span>
+          {entry.status === 'running' && (
+            <span className="flex items-center gap-1 text-[11px] text-emerald-300">
+              <span className="size-1.5 rounded-full bg-emerald-300 animate-pulse" />
+              running
+            </span>
+          )}
+        </div>
+        {entry.args && entry.type !== 'command' && (
+          <div className="mt-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 font-mono text-[11px] leading-5 text-zinc-500">
+            {Object.entries(entry.args)
+              .filter(([key]) => key !== 'content' && key !== 'patchText' && key !== 'oldString' && key !== 'newString')
+              .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+              .join('\n') || entry.title}
+          </div>
+        )}
+        {renderTerminalOutput(entry.output)}
+      </div>
+    );
+  };
+
+  const renderAgentRunCard = (runId: string) => {
+    const run = agentRuns[runId];
+    if (!run) {
+      return (
+        <div className="max-w-3xl mx-auto rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-zinc-500">
+          Loading agent run...
+        </div>
+      );
+    }
+
+    const statusClass = run.status === 'running'
+      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+      : run.status === 'failed'
+        ? 'border-red-500/30 bg-red-500/10 text-red-200'
+        : 'border-white/10 bg-white/5 text-zinc-300';
+    const terminalEntries = buildAgentTerminalEntries(run.steps);
+    const commandCount = terminalEntries.filter((entry) => entry.type === 'command').length;
+
+    return (
+      <div className="max-w-4xl mx-auto overflow-hidden rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30">
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-[#111113] px-4 py-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-zinc-100">{run.title}</div>
+            <div className="mt-1 truncate font-mono text-xs text-zinc-500">
+              {run.workspaceRoot} · {commandCount} command{commandCount === 1 ? '' : 's'} · {terminalEntries.length} events
+            </div>
+          </div>
+          <span className={`rounded-full border px-2 py-0.5 text-xs uppercase ${statusClass}`}>
+            {run.status}
+          </span>
+        </div>
+
+        <div className="border-b border-white/5 px-4 py-3">
+          <div className="font-mono text-xs text-zinc-500">task</div>
+          <div className="mt-1 text-sm leading-6 text-zinc-300">{run.prompt}</div>
+        </div>
+
+        <div
+          ref={(element) => {
+            agentTerminalRefs.current.set(run.id, element);
+          }}
+          className="max-h-[40rem] overflow-y-auto"
+        >
+          {terminalEntries.length === 0 ? (
+            <div className="px-4 py-5 font-mono text-sm text-zinc-500">
+              Waiting for the agent to start...
+            </div>
+          ) : (
+            terminalEntries.map(renderTerminalEntry)
+          )}
+          {run.status === 'running' && (
+            <div className="flex items-center gap-2 px-4 py-3 font-mono text-sm text-emerald-300">
+              <span className="text-zinc-500">$</span>
+              <span className="h-4 w-2 animate-pulse bg-emerald-300" aria-label="Agent is working" />
+            </div>
+          )}
+        </div>
+
+        {run.error && (
+          <div className="border-t border-red-500/20 bg-red-500/10 px-4 py-3 font-mono text-sm text-red-200">
+            {run.error}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderReasoningLog = (idx: number) => {
     const msg = messages[idx];
     const isProcessingMsg = idx === processingMessageIndex;
@@ -1504,6 +1813,42 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   };
 
   const renderMessage = (msg: ChatMessage, idx: number) => {
+    const agentRunId = getAgentRunIdFromMessage(msg);
+    if (agentRunId) {
+      const run = agentRuns[agentRunId];
+      return (
+        <React.Fragment key={msg.id || idx}>
+          <div
+            ref={(el) => messageRefs.current.set(idx, el)}
+            className={`${idx === 0 ? 'pt-8' : ''}`}
+          >
+            {renderAgentRunCard(agentRunId)}
+          </div>
+          {run?.finalAnswer && (
+            <div className="mx-auto flex max-w-3xl gap-3 sm:gap-4">
+              <div className="flex-1 min-w-0 space-y-4 text-zinc-300 text-sm leading-relaxed mt-1">
+                <div className="w-fit min-w-0 max-w-full break-words rounded-2xl rounded-tl-sm bg-transparent px-4 py-3 text-zinc-100 shadow-sm sm:px-5 sm:py-3.5">
+                  {run.model && (
+                    <div className="mb-3 flex items-center">
+                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                        {run.model}
+                      </span>
+                    </div>
+                  )}
+                  <div className="prose prose-invert max-w-full break-words min-w-0">
+                    <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{run.finalAnswer}</ReactMarkdown>
+                    {run.status === 'running' && (
+                      <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-zinc-400 align-text-bottom" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </React.Fragment>
+      );
+    }
+
     const isUser = msg.role === 'user';
     const isProcessingMsg = idx === processingMessageIndex;
     const isEditing = editingMessageIndex === idx;
@@ -1649,7 +1994,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         {renderReasoningLog(idx)}
       </React.Fragment>
     ));
-  }, [messages, currentAgentSteps, processingMessageIndex, expandedThoughts, streamingThoughtContent, 
+  }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, streamingThoughtContent, 
       streamingContent, currentStepType, editingMessageIndex, editContent, showRetryDropdown,
       copiedMessageId, highlightedMessage, isProcessing]);
 

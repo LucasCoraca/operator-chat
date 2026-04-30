@@ -103,6 +103,24 @@ export class SettingsRepository {
   async setMcpServers(servers: Record<string, any>): Promise<void> {
     await this.set('mcpServers', servers);
   }
+
+  async getRemoteWorkspace(): Promise<any> {
+    return this.get('remoteWorkspace') || {
+      enabled: false,
+      host: '',
+      port: 22,
+      username: '',
+      root: '',
+      privateKey: '',
+      strictHostKeyChecking: true,
+      approvalPolicy: 'ask',
+      toolApprovals: {},
+    };
+  }
+
+  async setRemoteWorkspace(config: any): Promise<void> {
+    await this.set('remoteWorkspace', config);
+  }
 }
 
 export const settingsRepository = new SettingsRepository();

@@ -17,6 +17,8 @@ export declare class SettingsRepository {
     setUiSettings(settings: any): Promise<void>;
     getMcpServers(): Promise<Record<string, any>>;
     setMcpServers(servers: Record<string, any>): Promise<void>;
+    getRemoteWorkspace(): Promise<any>;
+    setRemoteWorkspace(config: any): Promise<void>;
 }
 export declare const settingsRepository: SettingsRepository;
 //# sourceMappingURL=settingsRepository.d.ts.map

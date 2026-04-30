@@ -29,6 +29,7 @@ RUN apk add --no-cache \
     freetype-dev \
     harfbuzz \
     ca-certificates \
+    openssh-client \
     ttf-freefont
 
 # Create non-root user

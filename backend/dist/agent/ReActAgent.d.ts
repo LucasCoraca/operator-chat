@@ -1,5 +1,6 @@
 import { LlamaClient } from '../services/llamaClient';
 import { ToolRegistry, ChatToolPreference, ToolExecutionPolicy } from '../tools';
+import { WorkspaceConfig } from '../services/workspaceRuntime';
 export type AgentMode = 'research_mode' | 'compose_reply_mode';
 export interface AgentStep {
     type: 'action' | 'observation' | 'final_answer' | 'mode_transition';
@@ -28,6 +29,11 @@ export interface ToolApprovalResponse {
 export interface ChatApprovalMode {
     alwaysApprove: boolean;
 }
+export interface CreateAgentRunRequest {
+    title: string;
+    prompt: string;
+    workspaceRoot: string;
+}
 export interface ChatPersonality {
     id: string;
     name: string;
@@ -46,6 +52,7 @@ export interface AgentCallbacks {
     onCancelled?: () => void;
     onTimings?: (timings: ChatTimings) => void;
     onToolApprovalRequest?: (request: ToolApprovalRequest) => Promise<ToolApprovalResponse>;
+    onCreateAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
     onStepSave?: (chatId: string, step: AgentStep, allSteps: AgentStep[]) => void;
     onPartialFinalAnswer?: (chatId: string, partialContent: string) => void;
 }
@@ -91,6 +98,6 @@ export declare class ReActAgent {
     run(chatId: string, userMessage: string, sandboxId: string, userId: string, conversationHistory?: Array<{
         role: 'user' | 'assistant';
         content: string;
-    }>, memories?: string[], toolPreferences?: Record<string, ChatToolPreference>, approvalMode?: ChatApprovalMode): Promise<AgentState>;
+    }>, memories?: string[], toolPreferences?: Record<string, ChatToolPreference>, approvalMode?: ChatApprovalMode, workspace?: WorkspaceConfig): Promise<AgentState>;
 }
 //# sourceMappingURL=ReActAgent.d.ts.map

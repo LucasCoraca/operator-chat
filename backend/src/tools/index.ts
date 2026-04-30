@@ -3,6 +3,8 @@ import { SandboxManager } from '../services/sandboxManager';
 import { BrowserClient } from '../services/browserClient';
 import { MemoryManager } from '../services/memoryManager';
 import { MCPClientManager, MCPToolDefinition } from '../services/mcpClientManager';
+import { WorkspaceConfig, WorkspaceRuntimeFactory } from '../services/workspaceRuntime';
+import type { CreateAgentRunRequest } from '../agent/ReActAgent';
 import { taskRepository } from '../repositories/taskRepository';
 import { computeNextRun, normalizeDaysOfWeek } from '../services/schedule';
 import { exec } from 'child_process';
@@ -11,10 +13,19 @@ import { promisify } from 'util';
 const browserClient = new BrowserClient();
 const execAsync = promisify(exec);
 
+function quoteShellArg(value: string): string {
+  return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function isRemoteWorkspaceContext(context: { workspace?: WorkspaceConfig }): boolean {
+  return Boolean(context.workspace?.ssh?.enabled);
+}
+
 export type ToolCapability =
   | 'filesystem'
   | 'network'
   | 'process'
+  | 'remote'
   | 'browser'
   | 'read_chat'
   | 'write_chat'
@@ -25,6 +36,8 @@ export type ToolSandboxPolicy =
   | 'none'
   | 'chat_fs_only'
   | 'isolated_process'
+  | 'workspace_runtime'
+  | 'ssh_remote'
   | 'browser_isolated';
 
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
@@ -47,13 +60,15 @@ export interface Tool {
   description: string;
   parameters: Record<string, { type: string; description: string; required?: boolean }>;
   policy: ToolExecutionPolicy;
-  execute: (args: Record<string, any>, context: { sandboxId: string; userId: string; chatId?: string; model?: string }) => Promise<string>;
+  internal?: boolean;
+  execute: (args: Record<string, any>, context: { sandboxId: string; userId: string; chatId?: string; model?: string; workspace?: WorkspaceConfig; createAgentRun?: (request: CreateAgentRunRequest) => Promise<string> }) => Promise<string>;
 }
 
 export class ToolRegistry {
   private tools: Map<string, Tool>;
   private searxngClient: SearXNGClient;
   private sandboxManager: SandboxManager;
+  private workspaceRuntimeFactory: WorkspaceRuntimeFactory;
   private memoryManager: MemoryManager;
   private mcpClientManager?: MCPClientManager;
 
@@ -61,6 +76,7 @@ export class ToolRegistry {
     this.tools = new Map();
     this.searxngClient = searxngClient;
     this.sandboxManager = sandboxManager;
+    this.workspaceRuntimeFactory = new WorkspaceRuntimeFactory(sandboxManager);
     this.memoryManager = memoryManager;
     this.mcpClientManager = mcpClientManager;
     
@@ -69,6 +85,421 @@ export class ToolRegistry {
   }
 
   private registerBuiltInTools(): void {
+    this.tools.set('create_agent', {
+      name: 'create_agent',
+      description: 'Start a separate coding agent run in the configured SSH remote environment. Use this when the user asks to create/start/run an agent. The agent live trace will appear in the originating chat. The model must choose the workspaceRoot for the agent.',
+      parameters: {
+        title: { type: 'string', description: 'Short title for the agent run' },
+        prompt: { type: 'string', description: 'Complete task instruction for the new agent' },
+        workspaceRoot: { type: 'string', description: 'Absolute remote workspace path where the agent should run commands and edit files' },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: false,
+        capabilities: ['process', 'filesystem', 'remote', 'write_chat'],
+        sandboxPolicy: 'ssh_remote',
+        riskLevel: 'high',
+      },
+      execute: async (args, context) => {
+        if (!context.workspace?.ssh?.enabled) {
+          return 'Agent mode is not available. Configure the SSH remote workspace in Settings first, including host/IP, username, workspace root, and SSH key.';
+        }
+        if (!context.createAgentRun) {
+          return 'Error: Agent runner is not available in this context.';
+        }
+
+        const title = String(args.title || '').trim();
+        const prompt = String(args.prompt || '').trim();
+        const workspaceRoot = String(args.workspaceRoot || '').trim();
+        if (!title || !prompt || !workspaceRoot) {
+          return 'Error: title, prompt, and workspaceRoot are required to create an agent.';
+        }
+        if (!workspaceRoot.startsWith('/')) {
+          return 'Error: workspaceRoot must be an absolute remote path.';
+        }
+
+        try {
+          const runId = await context.createAgentRun({ title, prompt, workspaceRoot });
+          return `__agent_run_started__:${runId}`;
+        } catch (error) {
+          return `Error creating agent run: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('list', {
+      name: 'list',
+      internal: true,
+      description: 'List files and directories in the active workspace. In SSH agent mode this lists the configured remote workspace root. Use this to explore project structure before reading files.',
+      parameters: {
+        path: { type: 'string', description: 'Directory path relative to the active workspace root. Use "." for the root.', required: false },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          return await runtime.list((args.path as string) || '.');
+        } catch (error) {
+          return `Error listing workspace: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('read', {
+      name: 'read',
+      internal: true,
+      description: 'Read a text file from the active workspace, or list a directory if the path is a directory. Supports line offset and limit for large files.',
+      parameters: {
+        path: { type: 'string', description: 'File or directory path relative to the active workspace root' },
+        offset: { type: 'number', description: 'Line number to start reading from, 1-indexed. Defaults to 1.', required: false },
+        limit: { type: 'number', description: 'Maximum number of lines to read. Defaults to 300 and is capped at 1000.', required: false },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        const filePath = args.path as string;
+        if (!filePath) {
+          return 'Error: path is required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          return await runtime.readFile(filePath, {
+            offset: args.offset !== undefined ? Number(args.offset) : undefined,
+            limit: args.limit !== undefined ? Number(args.limit) : undefined,
+          });
+        } catch (error) {
+          return `Error reading workspace file: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('glob', {
+      name: 'glob',
+      internal: true,
+      description: 'Find files in the active workspace by glob-like path pattern. Use this to discover files before reading them. Example patterns: "**/*.ts", "src/**/*.tsx", "README*".',
+      parameters: {
+        pattern: { type: 'string', description: 'Glob-like file pattern relative to the active workspace root' },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        const pattern = args.pattern as string;
+        if (!pattern) {
+          return 'Error: pattern is required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          const result = await runtime.exec({
+            command: `find . -path ${quoteShellArg(`./${pattern}`)} -type f | sed 's#^./##' | sort | head -200`,
+          });
+          if (result.exitCode !== 0) {
+            return `Glob failed:\n${result.stderr || result.stdout || 'Unknown error'}`;
+          }
+          return result.stdout.trim() || 'No files matched.';
+        } catch (error) {
+          return `Error searching workspace files: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('grep', {
+      name: 'grep',
+      internal: true,
+      description: 'Search text in files in the active workspace using an extended regular expression. Use this for code search before reading or editing files.',
+      parameters: {
+        pattern: { type: 'string', description: 'Extended regular expression to search for' },
+        include: { type: 'string', description: 'Optional file glob to include, such as "*.ts" or "*.tsx".', required: false },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        const pattern = args.pattern as string;
+        if (!pattern) {
+          return 'Error: pattern is required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          const include = args.include ? ` --include=${quoteShellArg(String(args.include))}` : '';
+          const result = await runtime.exec({
+            command: `grep -RInE --exclude-dir=.git${include} -- ${quoteShellArg(pattern)} . | head -200`,
+          });
+          if (result.exitCode !== 0 && !result.stdout.trim()) {
+            return result.stderr.trim() ? `Grep failed:\n${result.stderr.trim()}` : 'No matches found.';
+          }
+          return result.stdout.trim() || 'No matches found.';
+        } catch (error) {
+          return `Error searching workspace content: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('bash', {
+      name: 'bash',
+      internal: true,
+      description: 'Run a shell command in the active workspace. In SSH agent mode this runs on the configured remote host. Use workdir instead of cd. Prefer read/edit/write/apply_patch for file changes.',
+      parameters: {
+        command: { type: 'string', description: 'The shell command to execute' },
+        description: { type: 'string', description: 'Clear concise description of what this command does' },
+        workdir: { type: 'string', description: 'Working directory relative to the active workspace root. Defaults to root.', required: false },
+        timeoutMs: { type: 'number', description: 'Optional timeout in milliseconds. Defaults to 120000.', required: false },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: true,
+        capabilities: ['process', 'filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'high',
+      },
+      execute: async (args, context) => {
+        const command = args.command as string;
+        if (!command) {
+          return 'Error: command is required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          const result = await runtime.exec({
+            command,
+            workdir: args.workdir as string | undefined,
+            timeoutMs: args.timeoutMs !== undefined ? Number(args.timeoutMs) : undefined,
+          });
+          const sections = [
+            `Command: ${command}`,
+            `Workspace: ${runtime.kind} ${runtime.root}`,
+            `Exit code: ${result.exitCode ?? 'unknown'}`,
+            `Duration: ${result.durationMs}ms`,
+          ];
+          if (result.timedOut) {
+            if (result.background) {
+              sections.push(`Status: still running in background terminal ${result.background.terminalId}`);
+              sections.push(`PID: ${result.background.pid}`);
+              sections.push('Use terminal_read to read more output later or terminal_kill to stop it.');
+            } else {
+              sections.push('Status: timed out and was terminated');
+            }
+          }
+          if (result.stdout.trim()) {
+            sections.push(`\nSTDOUT:\n${result.stdout.trimEnd()}`);
+          }
+          if (result.stderr.trim()) {
+            sections.push(`\nSTDERR:\n${result.stderr.trimEnd()}`);
+          }
+          if (!result.stdout.trim() && !result.stderr.trim()) {
+            sections.push('\n(no output)');
+          }
+          return sections.join('\n');
+        } catch (error) {
+          return `Error running workspace command: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('terminal_list', {
+      name: 'terminal_list',
+      internal: true,
+      description: 'List managed background terminals started by long-running bash commands in the active SSH workspace.',
+      parameters: {},
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: ['process', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'low',
+      },
+      execute: async (_args, context) => {
+        const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+        if (!runtime.listTerminals) {
+          return 'Error: managed terminals are not supported by this workspace runtime.';
+        }
+        try {
+          return await runtime.listTerminals();
+        } catch (error) {
+          return `Error listing managed terminals: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('terminal_read', {
+      name: 'terminal_read',
+      internal: true,
+      description: 'Read status and recent output from a managed background terminal started by a long-running bash command.',
+      parameters: {
+        terminalId: { type: 'string', description: 'Managed terminal id returned by bash' },
+        tailLines: { type: 'number', description: 'Number of stdout/stderr lines to read. Defaults to 120 and is capped at 1000.', required: false },
+        maxBytes: { type: 'number', description: 'Maximum bytes to return per stream. Defaults to 65536 and is capped at 262144.', required: false },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: ['process', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+        if (!runtime.readTerminal) {
+          return 'Error: managed terminals are not supported by this workspace runtime.';
+        }
+        try {
+          return await runtime.readTerminal(
+            String(args.terminalId || ''),
+            args.tailLines !== undefined ? Number(args.tailLines) : undefined,
+            args.maxBytes !== undefined ? Number(args.maxBytes) : undefined
+          );
+        } catch (error) {
+          return `Error reading managed terminal: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('terminal_kill', {
+      name: 'terminal_kill',
+      internal: true,
+      description: 'Terminate a managed background terminal started by a long-running bash command.',
+      parameters: {
+        terminalId: { type: 'string', description: 'Managed terminal id returned by bash' },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: true,
+        capabilities: ['process', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'high',
+      },
+      execute: async (args, context) => {
+        const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+        if (!runtime.killTerminal) {
+          return 'Error: managed terminals are not supported by this workspace runtime.';
+        }
+        try {
+          return await runtime.killTerminal(String(args.terminalId || ''));
+        } catch (error) {
+          return `Error killing managed terminal: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('write', {
+      name: 'write',
+      internal: true,
+      description: 'Create or overwrite a text file in the active workspace. In SSH agent mode this writes to the configured remote host. Use edit for precise changes to existing files.',
+      parameters: {
+        path: { type: 'string', description: 'File path relative to the active workspace root' },
+        content: { type: 'string', description: 'Complete file content to write' },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'medium',
+      },
+      execute: async (args, context) => {
+        const filePath = args.path as string;
+        if (!filePath) {
+          return 'Error: path is required';
+        }
+        if (args.content === undefined || args.content === null) {
+          return 'Error: content is required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          return await runtime.writeFile(filePath, String(args.content));
+        } catch (error) {
+          return `Error writing workspace file: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('edit', {
+      name: 'edit',
+      internal: true,
+      description: 'Modify an existing workspace file by replacing an exact oldString with newString. Use this for precise, reviewable code edits. If there are multiple matches, add more surrounding context.',
+      parameters: {
+        path: { type: 'string', description: 'File path relative to the active workspace root' },
+        oldString: { type: 'string', description: 'Exact text to replace' },
+        newString: { type: 'string', description: 'Replacement text' },
+        replaceAll: { type: 'boolean', description: 'Replace all matches instead of requiring a unique match. Defaults to false.', required: false },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'medium',
+      },
+      execute: async (args, context) => {
+        const filePath = args.path as string;
+        if (!filePath) {
+          return 'Error: path is required';
+        }
+        if (args.oldString === undefined || args.newString === undefined) {
+          return 'Error: oldString and newString are required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          return await runtime.editFile(filePath, String(args.oldString), String(args.newString), Boolean(args.replaceAll));
+        } catch (error) {
+          return `Error editing workspace file: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
+    this.tools.set('apply_patch', {
+      name: 'apply_patch',
+      internal: true,
+      description: 'Apply a patch to files in the active workspace. Paths in the patch must be relative to the workspace root and use OpenCode/Codex-style Begin Patch markers.',
+      parameters: {
+        patchText: { type: 'string', description: 'Full patch text with *** Begin Patch and *** End Patch markers' },
+      },
+      policy: {
+        requiresApproval: true,
+        supportsAutoApprove: true,
+        capabilities: ['filesystem', 'remote'],
+        sandboxPolicy: 'workspace_runtime',
+        riskLevel: 'medium',
+      },
+      execute: async (args, context) => {
+        const patchText = args.patchText as string;
+        if (!patchText) {
+          return 'Error: patchText is required';
+        }
+
+        try {
+          const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+          return await runtime.applyPatch(patchText);
+        } catch (error) {
+          return `Error applying workspace patch: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      },
+    });
+
     // Web Search Tool
     this.tools.set('web_search', {
       name: 'web_search',
@@ -215,6 +646,9 @@ export class ToolRegistry {
         riskLevel: 'low',
       },
       execute: async (args, context) => {
+        if (isRemoteWorkspaceContext(context)) {
+          return 'Error: file_list is disabled in SSH agent mode. Use the remote list tool instead.';
+        }
         const dirPath = (args.path as string) || '';
 
         try {
@@ -244,6 +678,9 @@ export class ToolRegistry {
         riskLevel: 'high',
       },
       execute: async (args, context) => {
+        if (isRemoteWorkspaceContext(context)) {
+          return 'Error: python_execute is disabled in SSH agent mode. Use bash to run commands on the configured remote workspace.';
+        }
         const code = args.code as string;
         if (!code) {
           return 'Error: No Python code provided';
@@ -286,6 +723,9 @@ export class ToolRegistry {
         riskLevel: 'medium',
       },
       execute: async (args, context) => {
+        if (isRemoteWorkspaceContext(context)) {
+          return 'Error: file_mkdir is disabled in SSH agent mode. Use bash or write through the configured remote workspace.';
+        }
         const dirPath = args.path as string;
         if (!dirPath) {
           return 'Error: No directory path provided';
@@ -315,6 +755,9 @@ export class ToolRegistry {
         riskLevel: 'high',
       },
       execute: async (args, context) => {
+        if (isRemoteWorkspaceContext(context)) {
+          return 'Error: file_delete is disabled in SSH agent mode. Use bash on the configured remote workspace if deletion is explicitly required.';
+        }
         const filePath = args.path as string;
         if (!filePath) {
           return 'Error: No path provided';
@@ -627,6 +1070,10 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
+  getPublicTools(): Tool[] {
+    return this.getTools().filter((tool) => !tool.internal);
+  }
+
   getFilteredTools(enabledToolNames?: string[]): Tool[] {
     if (!enabledToolNames) {
       return this.getTools();
@@ -696,7 +1143,7 @@ export class ToolRegistry {
   async executeTool(
     name: string,
     args: Record<string, any>,
-    context: { sandboxId: string; userId: string; chatId?: string; model?: string },
+    context: { sandboxId: string; userId: string; chatId?: string; model?: string; workspace?: WorkspaceConfig; createAgentRun?: (request: CreateAgentRunRequest) => Promise<string> },
     enabledToolNames?: string[]
   ): Promise<string> {
     const availableTools = this.getFilteredTools(enabledToolNames);

@@ -6,6 +6,7 @@ import ChatInterface from './components/ChatInterface';
 import SettingsPanel from './components/SettingsPanel';
 import SandboxExplorer from './components/SandboxExplorer';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
+import AgentManager from './components/AgentManager';
 import { PersonalityManager } from './components/PersonalityManager';
 import { MemoryManagerModal } from './components/MemoryManagerModal';
 import { AuthProvider, useAuth } from './components/AuthContext';
@@ -28,6 +29,18 @@ interface Settings {
     selectedPersonality: string;
     selectedModel?: string;
     defaultToolPreferences: Record<string, ToolPreference>;
+  };
+  remoteWorkspace: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    root: string;
+    privateKey?: string;
+    hasPrivateKey?: boolean;
+    strictHostKeyChecking: boolean;
+    approvalPolicy: 'ask' | 'auto-approve';
+    toolApprovals: Record<string, 'ask' | 'auto-approve'>;
   };
 }
 
@@ -187,6 +200,17 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       selectedPersonality: 'professional',
       defaultToolPreferences: {},
     },
+    remoteWorkspace: {
+      enabled: false,
+      host: '',
+      port: 22,
+      username: '',
+      root: '',
+      privateKey: '',
+      strictHostKeyChecking: true,
+      approvalPolicy: 'ask',
+      toolApprovals: {},
+    },
   });
   const [chats, setChats] = useState<Chat[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
@@ -211,6 +235,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [showPersonalityManager, setShowPersonalityManager] = useState(false);
   const [showMemoryManager, setShowMemoryManager] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
+  const [showAgents, setShowAgents] = useState(false);
   const [unreadChatIds, setUnreadChatIds] = useState<Set<string>>(new Set());
   const landingFileInputRef = useRef<HTMLInputElement>(null);
   const landingToolPickerRef = useRef<HTMLDivElement>(null);
@@ -255,18 +280,18 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
 
   useEffect(() => {
     currentChatIdRef.current = currentChatId;
-    showTasksRef.current = showTasks;
-  }, [currentChatId, showTasks]);
+    showTasksRef.current = showTasks || showAgents;
+  }, [currentChatId, showTasks, showAgents]);
 
   useEffect(() => {
-    if (!currentChatId || showTasks) return;
+    if (!currentChatId || showTasks || showAgents) return;
     setUnreadChatIds((prev) => {
       if (!prev.has(currentChatId)) return prev;
       const next = new Set(prev);
       next.delete(currentChatId);
       return next;
     });
-  }, [currentChatId, showTasks]);
+  }, [currentChatId, showTasks, showAgents]);
 
   const parseJsonSafely = async (res: Response) => {
     const text = await res.text();
@@ -304,6 +329,18 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             selectedPersonality: 'professional',
             defaultToolPreferences: {},
             ...data.ui,
+          },
+          remoteWorkspace: {
+            enabled: false,
+            host: '',
+            port: 22,
+            username: '',
+            root: '',
+            privateKey: '',
+            strictHostKeyChecking: true,
+            approvalPolicy: 'ask',
+            toolApprovals: {},
+            ...data.remoteWorkspace,
           },
         });
       })
@@ -858,17 +895,26 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
     setCurrentChatId(null);
     setCurrentSandboxId(null);
     setShowTasks(false);
+    setShowAgents(false);
     navigate('/');
     setShowMobileSidebar(false);
   };
 
   const openTasks = () => {
     setShowTasks(true);
+    setShowAgents(false);
+    setShowMobileSidebar(false);
+  };
+
+  const openAgents = () => {
+    setShowAgents(true);
+    setShowTasks(false);
     setShowMobileSidebar(false);
   };
 
   const openChatFromTask = (chatId: string) => {
     setShowTasks(false);
+    setShowAgents(false);
     navigate(`/chat/${chatId}`);
     setShowMobileSidebar(false);
   };
@@ -895,6 +941,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   return next;
                 });
                 setShowTasks(false);
+                setShowAgents(false);
                 navigate(`/chat/${chat.id}`);
                 setShowMobileSidebar(false);
               }}
@@ -979,6 +1026,19 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             </svg>
             <span className="font-medium">{t('scheduler.tasks')}</span>
           </button>
+          <button
+            onClick={openAgents}
+            className={`mt-2 w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all ${
+              showAgents
+                ? 'border-brand/40 bg-brand/15 text-brand'
+                : 'border-white/10 bg-transparent text-zinc-400 hover:bg-surface-100 hover:text-zinc-100'
+            }`}
+          >
+            <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+            </svg>
+            <span className="font-medium">Agents</span>
+          </button>
         </div>
 
         <div className="px-3 pb-3">
@@ -1015,6 +1075,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                         return next;
                       });
                       setShowTasks(false);
+                      setShowAgents(false);
                       navigate(`/chat/${result.chatId}?msg=${result.matchingMessages[0]?.messageIndex ?? 0}`);
                       setShowMobileSidebar(false);
                     }}
@@ -1091,6 +1152,19 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             </svg>
             <span className="font-medium">{t('scheduler.tasks')}</span>
           </button>
+          <button
+            onClick={openAgents}
+            className={`mt-2 w-full flex items-center gap-3 rounded-xl border px-4 py-3 text-sm transition-all ${
+              showAgents
+                ? 'border-brand/40 bg-brand/15 text-brand'
+                : 'border-white/10 bg-transparent text-zinc-400 hover:bg-surface-100 hover:text-zinc-100'
+            }`}
+          >
+            <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+            </svg>
+            <span className="font-medium">Agents</span>
+          </button>
         </div>
 
         <div className="px-3 pb-3">
@@ -1127,6 +1201,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                         return next;
                       });
                       setShowTasks(false);
+                      setShowAgents(false);
                       navigate(`/chat/${result.chatId}?msg=${result.matchingMessages[0]?.messageIndex ?? 0}`);
                       setShowMobileSidebar(false);
                     }}
@@ -1195,7 +1270,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   />
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-zinc-100">
-                      {showTasks ? t('scheduler.title') : currentChat?.name ?? 'Operator Chat'}
+                      {showAgents ? 'Agents' : showTasks ? t('scheduler.title') : currentChat?.name ?? 'Operator Chat'}
                     </div>
                     <div className="truncate text-[11px] uppercase tracking-[0.18em] text-zinc-500">
                       {currentModel || 'No model'}
@@ -1299,7 +1374,9 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
         </header>
 
         {/* Chat Content */}
-        {showTasks ? (
+        {showAgents ? (
+          <AgentManager onOpenChat={openChatFromTask} />
+        ) : showTasks ? (
           <ScheduledTaskManager
             socket={socket}
             currentChatId={currentChatId}

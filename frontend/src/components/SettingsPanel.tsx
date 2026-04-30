@@ -4,7 +4,7 @@ import { PersonalitySelector } from './PersonalitySelector';
 import { MCPServerManager } from './MCPServerManager';
 import { supportedLanguages } from '../i18n';
 
-type SettingsSection = 'general' | 'tools' | 'personality' | 'mcp';
+type SettingsSection = 'general' | 'tools' | 'agent' | 'personality' | 'mcp';
 
 interface ChatPersonality {
   id: string;
@@ -21,6 +21,18 @@ interface Settings {
     selectedPersonality: string;
     selectedModel?: string;
     defaultToolPreferences: Record<string, ToolPreference>;
+  };
+  remoteWorkspace: {
+    enabled: boolean;
+    host: string;
+    port: number;
+    username: string;
+    root: string;
+    privateKey?: string;
+    hasPrivateKey?: boolean;
+    strictHostKeyChecking: boolean;
+    approvalPolicy: 'ask' | 'auto-approve';
+    toolApprovals: Record<string, 'ask' | 'auto-approve'>;
   };
 }
 
@@ -41,6 +53,20 @@ interface ToolPreference {
   enabled: boolean;
   autoApprove: boolean;
 }
+
+const agentToolApprovalOptions = [
+  { name: 'list', label: 'List files', description: 'Inspect remote directory contents.' },
+  { name: 'read', label: 'Read files', description: 'Read files from the remote workspace.' },
+  { name: 'glob', label: 'Find paths', description: 'Search remote file paths by pattern.' },
+  { name: 'grep', label: 'Search text', description: 'Search remote file contents.' },
+  { name: 'bash', label: 'Run commands', description: 'Execute shell commands over SSH.' },
+  { name: 'terminal_list', label: 'List terminals', description: 'Inspect managed background terminals.' },
+  { name: 'terminal_read', label: 'Read terminal', description: 'Read output from a background terminal.' },
+  { name: 'terminal_kill', label: 'Kill terminal', description: 'Stop a background terminal process.' },
+  { name: 'write', label: 'Write files', description: 'Create or replace files in the remote workspace.' },
+  { name: 'edit', label: 'Edit files', description: 'Modify existing remote files.' },
+  { name: 'apply_patch', label: 'Apply patches', description: 'Apply structured patches to remote files.' },
+] as const;
 
 interface SettingsPanelProps {
   settings: Settings;
@@ -88,6 +114,16 @@ function SettingsPanel({
       icon: (
         <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.83-5.83M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l5.653-4.655M12 6.75a3 3 0 016 0c0 .744-.27 1.425-.717 1.95" />
+        </svg>
+      ),
+    },
+    {
+      id: 'agent',
+      label: 'Agent Workspace',
+      description: 'SSH remote',
+      icon: (
+        <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
         </svg>
       ),
     },
@@ -165,6 +201,46 @@ function SettingsPanel({
         },
       },
     }));
+  };
+
+  const handleRemoteWorkspaceChange = (
+    field: keyof Settings['remoteWorkspace'],
+    value: string | number | boolean
+  ) => {
+    setFormData((prev) => ({
+      ...prev,
+      remoteWorkspace: {
+        ...prev.remoteWorkspace,
+        [field]: value,
+      },
+    }));
+  };
+
+  const getAgentToolApproval = (toolName: string) => (
+    formData.remoteWorkspace.toolApprovals?.[toolName]
+    ?? formData.remoteWorkspace.approvalPolicy
+    ?? 'ask'
+  );
+
+  const handleAgentToolApprovalChange = (toolName: string, value: 'ask' | 'auto-approve') => {
+    setFormData((prev) => {
+      const toolApprovals = {
+        ...prev.remoteWorkspace.toolApprovals,
+        [toolName]: value,
+      };
+      const allAutoApproved = agentToolApprovalOptions.every((tool) => (
+        toolApprovals[tool.name] ?? prev.remoteWorkspace.approvalPolicy
+      ) === 'auto-approve');
+
+      return {
+        ...prev,
+        remoteWorkspace: {
+          ...prev.remoteWorkspace,
+          approvalPolicy: allAutoApproved ? 'auto-approve' : 'ask',
+          toolApprovals,
+        },
+      };
+    });
   };
 
   const handleBackdropClick = () => {
@@ -304,6 +380,135 @@ function SettingsPanel({
             personalities={personalities}
             compact={false}
           />
+        </div>
+      );
+    }
+
+    if (activeSection === 'agent') {
+      return (
+        <div className="space-y-5">
+          <div>
+            <h3 className="text-lg font-semibold text-brand">Agent Workspace</h3>
+            <p className="mt-1 text-sm text-zinc-500">
+              Configure the SSH environment used by agent mode. Without this, coding agents will say setup is required.
+            </p>
+          </div>
+
+          <section className="space-y-4 rounded-xl border border-white/10 bg-black/20 p-4">
+            <label className="flex items-center justify-between gap-4">
+              <span>
+                <span className="block text-sm font-medium text-zinc-100">Enable SSH agent workspace</span>
+                <span className="mt-1 block text-xs text-zinc-500">All agent commands and file edits run on this remote host.</span>
+              </span>
+              <input
+                type="checkbox"
+                checked={formData.remoteWorkspace.enabled}
+                onChange={(event) => handleRemoteWorkspaceChange('enabled', event.target.checked)}
+                className="h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50"
+              />
+            </label>
+
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Host or IP</span>
+                <input
+                  value={formData.remoteWorkspace.host}
+                  onChange={(event) => handleRemoteWorkspaceChange('host', event.target.value)}
+                  placeholder="192.168.1.20"
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Port</span>
+                <input
+                  type="number"
+                  value={formData.remoteWorkspace.port}
+                  onChange={(event) => handleRemoteWorkspaceChange('port', Number(event.target.value) || 22)}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Username</span>
+                <input
+                  value={formData.remoteWorkspace.username}
+                  onChange={(event) => handleRemoteWorkspaceChange('username', event.target.value)}
+                  placeholder="ubuntu"
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Workspace root</span>
+                <input
+                  value={formData.remoteWorkspace.root}
+                  onChange={(event) => handleRemoteWorkspaceChange('root', event.target.value)}
+                  placeholder="/home/ubuntu/project"
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+            </div>
+
+            <label className="space-y-1 text-xs text-zinc-400">
+              <span>Private SSH key</span>
+              <textarea
+                value={formData.remoteWorkspace.privateKey || ''}
+                onChange={(event) => handleRemoteWorkspaceChange('privateKey', event.target.value)}
+                placeholder={formData.remoteWorkspace.hasPrivateKey ? 'A private key is already saved. Leave blank to keep it.' : '-----BEGIN OPENSSH PRIVATE KEY-----'}
+                rows={7}
+                className="w-full resize-y rounded-lg border border-white/10 bg-[#27272a] px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-brand/50"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <input
+                type="checkbox"
+                checked={formData.remoteWorkspace.strictHostKeyChecking}
+                onChange={(event) => handleRemoteWorkspaceChange('strictHostKeyChecking', event.target.checked)}
+                className="h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50"
+              />
+              Strict host key checking
+            </label>
+
+            <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+              <div>
+                <div className="text-sm font-medium text-zinc-100">Agent approvals</div>
+                <div className="mt-1 text-xs leading-5 text-zinc-500">
+                  Choose which spawned-agent tools pause for approval and which continue automatically.
+                </div>
+              </div>
+
+              <div className="grid gap-2">
+                {agentToolApprovalOptions.map((tool) => {
+                  const approval = getAgentToolApproval(tool.name);
+                  return (
+                    <div
+                      key={tool.name}
+                      className="grid gap-3 rounded-lg border border-white/5 bg-black/20 p-3 sm:grid-cols-[minmax(0,1fr)_12rem] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-zinc-100">{tool.label}</div>
+                        <div className="mt-1 text-xs leading-5 text-zinc-500">{tool.description}</div>
+                      </div>
+                      <select
+                        value={approval}
+                        onChange={(event) => handleAgentToolApprovalChange(tool.name, event.target.value as 'ask' | 'auto-approve')}
+                        className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                      >
+                        <option value="ask">Ask first</option>
+                        <option value="auto-approve">Auto-approve</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {agentToolApprovalOptions.some((tool) => getAgentToolApproval(tool.name) === 'auto-approve') && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
+                  Auto-approve is dangerous. Agents will be able to use selected remote tools without stopping for confirmation, including commands or file edits if those are enabled.
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       );
     }
