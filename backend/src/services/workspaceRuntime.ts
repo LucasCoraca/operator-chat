@@ -510,14 +510,14 @@ echo "Kill signal sent to terminal ${id} (pid $pid)."
     if (keyPath) {
       args.push('-i', keyPath);
     }
-    args.push(`${this.config.username}@${this.config.host}`, 'sh', '-lc');
+    args.push(`${this.config.username}@${this.config.host}`);
     return args;
   }
 
   private async execRaw(script: string, timeoutMs: number): Promise<CommandResult> {
     const tempKeyPath = this.config.privateKey ? writeTempPrivateKey(this.config.privateKey) : undefined;
     try {
-      return await runProcess('ssh', [...this.sshArgs(tempKeyPath), script], { timeoutMs });
+      return await runProcess('ssh', [...this.sshArgs(tempKeyPath), `sh -lc ${shellQuote(script)}`], { timeoutMs });
     } finally {
       if (tempKeyPath) {
         fs.rmSync(path.dirname(tempKeyPath), { recursive: true, force: true });

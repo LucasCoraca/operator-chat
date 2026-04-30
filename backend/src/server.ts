@@ -14,7 +14,7 @@ import { MemoryManager } from './services/memoryManager';
 import { MCPClientManager, MCPServerConfig } from './services/mcpClientManager';
 import { ToolRegistry, ChatToolPreference } from './tools';
 import { ReActAgent, AgentStep, ToolApprovalRequest, ToolApprovalResponse, CreateAgentRunRequest } from './agent/ReActAgent';
-import { WorkspaceConfig } from './services/workspaceRuntime';
+import { WorkspaceConfig, WorkspaceRuntimeFactory } from './services/workspaceRuntime';
 import { protect, registerUser, loginUser, getMe, AuthRequest } from './auth';
 import { initializeDatabase, testConnection } from './db';
 import { chatRepository, personalityRepository, settingsRepository, taskRepository, ScheduledTask } from './repositories';
@@ -141,6 +141,7 @@ let loadedSettings = defaultSettings;
 // Global state
 const sandboxManager = new SandboxManager();
 const memoryManager = new MemoryManager();
+const workspaceRuntimeFactory = new WorkspaceRuntimeFactory(sandboxManager);
 let searxngConfig: SearXNGConfig = loadedSettings.searxng;
 let llamaConfig: LlamaConfig = loadedSettings.llama;
 
@@ -810,6 +811,27 @@ function getPendingApprovalPayloadForChat(chatId: string): ToolApprovalRequestPa
   }
 
   return null;
+}
+
+function parseWorkspaceListOutput(output: string, basePath: string | undefined) {
+  const base = typeof basePath === 'string' ? basePath.replace(/^\/+|\/+$/g, '') : '';
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => line !== '(empty directory)')
+    .map((line) => {
+      const [type, ...nameParts] = line.split(/\s+/);
+      const rawName = nameParts.join(' ');
+      const name = rawName.endsWith('/') ? rawName.slice(0, -1) : rawName;
+      const isDirectory = type === 'd';
+      return {
+        path: base ? path.posix.join(base, name) : name,
+        isDirectory,
+        isProtected: false,
+      };
+    })
+    .filter((item) => item.path && item.path !== '.');
 }
 
 async function getSelectedPersonality(): Promise<ChatPersonality | null> {
@@ -1741,6 +1763,44 @@ app.delete('/api/sandbox/:sandboxId/files/:filePath', protect, (req: AuthRequest
   try {
     sandboxManager.deleteFile(sandboxId, decodeURIComponent(filePath));
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// Remote SSH workspace browser
+app.get('/api/remote-workspace/files', protect, async (req: AuthRequest, res) => {
+  const { path: filePath } = req.query;
+  const workspace = getConfiguredWorkspaceConfig();
+  if (!workspace?.ssh?.enabled) {
+    return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
+  }
+
+  try {
+    const runtime = workspaceRuntimeFactory.createRemote(workspace);
+    const relativePath = typeof filePath === 'string' ? filePath : '.';
+    const listing = await runtime.list(relativePath || '.');
+    res.json(parseWorkspaceListOutput(listing, relativePath));
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+app.get('/api/remote-workspace/files/:filePath', protect, async (req: AuthRequest, res) => {
+  const { filePath } = req.params;
+  const { offset, limit } = req.query;
+  const workspace = getConfiguredWorkspaceConfig();
+  if (!workspace?.ssh?.enabled) {
+    return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
+  }
+
+  try {
+    const runtime = workspaceRuntimeFactory.createRemote(workspace);
+    const content = await runtime.readFile(decodeURIComponent(filePath), {
+      offset: offset !== undefined ? Number(offset) : undefined,
+      limit: limit !== undefined ? Number(limit) : undefined,
+    });
+    res.json({ content });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }

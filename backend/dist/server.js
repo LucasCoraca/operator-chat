@@ -19,6 +19,7 @@ const memoryManager_1 = require("./services/memoryManager");
 const mcpClientManager_1 = require("./services/mcpClientManager");
 const tools_1 = require("./tools");
 const ReActAgent_1 = require("./agent/ReActAgent");
+const workspaceRuntime_1 = require("./services/workspaceRuntime");
 const auth_1 = require("./auth");
 const db_1 = require("./db");
 const repositories_1 = require("./repositories");
@@ -103,6 +104,7 @@ let loadedSettings = defaultSettings;
 // Global state
 const sandboxManager = new sandboxManager_1.SandboxManager();
 const memoryManager = new memoryManager_1.MemoryManager();
+const workspaceRuntimeFactory = new workspaceRuntime_1.WorkspaceRuntimeFactory(sandboxManager);
 let searxngConfig = loadedSettings.searxng;
 let llamaConfig = loadedSettings.llama;
 // Initialize clients
@@ -627,6 +629,26 @@ function getPendingApprovalPayloadForChat(chatId) {
         }
     }
     return null;
+}
+function parseWorkspaceListOutput(output, basePath) {
+    const base = typeof basePath === 'string' ? basePath.replace(/^\/+|\/+$/g, '') : '';
+    return output
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((line) => line !== '(empty directory)')
+        .map((line) => {
+        const [type, ...nameParts] = line.split(/\s+/);
+        const rawName = nameParts.join(' ');
+        const name = rawName.endsWith('/') ? rawName.slice(0, -1) : rawName;
+        const isDirectory = type === 'd';
+        return {
+            path: base ? path_1.default.posix.join(base, name) : name,
+            isDirectory,
+            isProtected: false,
+        };
+    })
+        .filter((item) => item.path && item.path !== '.');
 }
 async function getSelectedPersonality() {
     const selectedPersonalityId = loadedSettings.ui.selectedPersonality;
@@ -1400,6 +1422,42 @@ app.delete('/api/sandbox/:sandboxId/files/:filePath', auth_1.protect, (req, res)
     try {
         sandboxManager.deleteFile(sandboxId, decodeURIComponent(filePath));
         res.json({ success: true });
+    }
+    catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
+// Remote SSH workspace browser
+app.get('/api/remote-workspace/files', auth_1.protect, async (req, res) => {
+    const { path: filePath } = req.query;
+    const workspace = getConfiguredWorkspaceConfig();
+    if (!workspace?.ssh?.enabled) {
+        return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
+    }
+    try {
+        const runtime = workspaceRuntimeFactory.createRemote(workspace);
+        const relativePath = typeof filePath === 'string' ? filePath : '.';
+        const listing = await runtime.list(relativePath || '.');
+        res.json(parseWorkspaceListOutput(listing, relativePath));
+    }
+    catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
+app.get('/api/remote-workspace/files/:filePath', auth_1.protect, async (req, res) => {
+    const { filePath } = req.params;
+    const { offset, limit } = req.query;
+    const workspace = getConfiguredWorkspaceConfig();
+    if (!workspace?.ssh?.enabled) {
+        return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
+    }
+    try {
+        const runtime = workspaceRuntimeFactory.createRemote(workspace);
+        const content = await runtime.readFile(decodeURIComponent(filePath), {
+            offset: offset !== undefined ? Number(offset) : undefined,
+            limit: limit !== undefined ? Number(limit) : undefined,
+        });
+        res.json({ content });
     }
     catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });

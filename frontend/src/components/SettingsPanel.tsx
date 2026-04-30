@@ -547,7 +547,7 @@ function SettingsPanel({
           </button>
         </div>
 
-        <div className="min-h-0 flex-1 md:grid md:grid-cols-[220px_minmax(0,1fr)]">
+        <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[220px_minmax(0,1fr)]">
           <nav className="border-b border-white/10 p-3 md:border-b-0 md:border-r md:p-4">
             <div className="flex gap-2 overflow-x-auto md:block md:space-y-1 md:overflow-visible">
               {sections.map((section) => {
@@ -576,7 +576,7 @@ function SettingsPanel({
             </div>
           </nav>
 
-          <div className="min-h-0 overflow-y-auto p-4 sm:p-6">
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6">
             {renderSection()}
           </div>
         </div>

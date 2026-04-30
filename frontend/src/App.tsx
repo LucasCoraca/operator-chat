@@ -5,6 +5,7 @@ import { BrowserRouter, Routes, Route, useParams, useNavigate } from 'react-rout
 import ChatInterface from './components/ChatInterface';
 import SettingsPanel from './components/SettingsPanel';
 import SandboxExplorer from './components/SandboxExplorer';
+import RemoteWorkspaceExplorer from './components/RemoteWorkspaceExplorer';
 import ScheduledTaskManager from './components/ScheduledTaskManager';
 import AgentManager from './components/AgentManager';
 import { PersonalityManager } from './components/PersonalityManager';
@@ -217,6 +218,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [currentSandboxId, setCurrentSandboxId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showSandbox, setShowSandbox] = useState(false);
+  const [showRemoteWorkspace, setShowRemoteWorkspace] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [invalidChatId, setInvalidChatId] = useState(false);
@@ -1354,10 +1356,22 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                 </svg>
               </button>
               <button
-                onClick={() => setShowSandbox(!showSandbox)}
+                onClick={() => {
+                  setShowSandbox(!showSandbox);
+                  setShowRemoteWorkspace(false);
+                }}
                 className={`rounded-lg border border-white/10 px-2.5 py-2 text-xs font-medium transition-colors md:px-3 md:py-1.5 md:text-sm ${showSandbox ? 'bg-brand text-white' : 'text-zinc-300 hover:bg-surface-100'}`}
               >
                 Sandbox
+              </button>
+              <button
+                onClick={() => {
+                  setShowRemoteWorkspace(!showRemoteWorkspace);
+                  setShowSandbox(false);
+                }}
+                className={`rounded-lg border border-white/10 px-2.5 py-2 text-xs font-medium transition-colors md:px-3 md:py-1.5 md:text-sm ${showRemoteWorkspace ? 'bg-brand text-white' : 'text-zinc-300 hover:bg-surface-100'}`}
+              >
+                Remote
               </button>
               <button
                 onClick={() => setShowSettings(true)}
@@ -1419,6 +1433,30 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                     </button>
                   </div>
                   <SandboxExplorer sandboxId={currentSandboxId} />
+                </div>
+              </>
+            )}
+            {showRemoteWorkspace && (
+              <>
+                <div
+                  className="fixed inset-0 z-20 bg-black/50 md:hidden"
+                  onClick={() => setShowRemoteWorkspace(false)}
+                />
+                <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[28px] border-t border-white/10 bg-[#111111] shadow-2xl shadow-black/40 md:static md:inset-auto md:w-full md:max-w-[400px] md:flex-shrink-0 md:rounded-none md:border-l md:border-t-0 md:border-white/5 md:shadow-none">
+                  <div className="relative flex items-center justify-between border-b border-white/5 bg-[#111111] p-3">
+                    <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-white/10 md:hidden" />
+                    <h3 className="font-semibold text-zinc-100">Remote workspace</h3>
+                    <button
+                      onClick={() => setShowRemoteWorkspace(false)}
+                      className="rounded-lg p-2 transition-colors hover:bg-surface-100"
+                      aria-label="Close remote workspace"
+                    >
+                      <svg className="size-5 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <RemoteWorkspaceExplorer />
                 </div>
               </>
             )}

@@ -237,7 +237,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const distanceFromBottomRef = useRef(0);
   const toolPickerRef = useRef<HTMLDivElement>(null);
-  const agentTerminalRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   
   // Refs for socket event handlers to avoid re-registering callbacks
   const messagesRef = useRef<ChatMessage[]>([]);
@@ -326,15 +325,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       jumpButtonRef.current.style.display = 'none';
     }
   }, []);
-
-  useEffect(() => {
-    for (const [runId, element] of agentTerminalRefs.current.entries()) {
-      if (!element) continue;
-      const run = agentRuns[runId];
-      if (!run || run.status !== 'running') continue;
-      element.scrollTop = element.scrollHeight;
-    }
-  }, [agentRuns]);
 
   // Socket event handlers - use refs to avoid re-registering callbacks
   useEffect(() => {
@@ -1637,7 +1627,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     const visible = lines.length > 240 ? lines.slice(-240) : lines;
 
     return (
-      <pre className="mt-2 max-h-[26rem] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
+      <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
         {lines.length > visible.length ? `[showing last ${visible.length} of ${lines.length} lines]\n` : ''}
         {visible.join('\n')}
       </pre>
@@ -1717,12 +1707,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           <div className="mt-1 text-sm leading-6 text-zinc-300">{run.prompt}</div>
         </div>
 
-        <div
-          ref={(element) => {
-            agentTerminalRefs.current.set(run.id, element);
-          }}
-          className="max-h-[40rem] overflow-y-auto"
-        >
+        <div>
           {terminalEntries.length === 0 ? (
             <div className="px-4 py-5 font-mono text-sm text-zinc-500">
               Waiting for the agent to start...
