@@ -86,6 +86,17 @@ const defaultSettings = {
         defaultToolPreferences: {},
     },
     mcpServers: {},
+    remoteWorkspace: {
+        enabled: false,
+        host: '',
+        port: 22,
+        username: '',
+        root: '',
+        privateKey: '',
+        strictHostKeyChecking: true,
+        approvalPolicy: 'ask',
+        toolApprovals: {},
+    },
 };
 // Settings will be loaded asynchronously
 let loadedSettings = defaultSettings;
@@ -134,10 +145,12 @@ async function initializeApp() {
         // Load UI and MCP settings from database (llama/searxng come from env vars)
         const uiSettings = await repositories_1.settingsRepository.getUiSettings();
         const mcpServersSettings = await repositories_1.settingsRepository.getMcpServers();
+        const remoteWorkspaceSettings = await repositories_1.settingsRepository.getRemoteWorkspace();
         loadedSettings = {
             ...defaultSettings,
             ui: uiSettings || defaultSettings.ui,
             mcpServers: mcpServersSettings || defaultSettings.mcpServers,
+            remoteWorkspace: normalizeRemoteWorkspaceSettings(remoteWorkspaceSettings),
         };
         loadedSettings.ui.defaultToolPreferences = toolRegistry.mergeWithDefaultPreferences(loadedSettings.ui.defaultToolPreferences);
         // Hydrate in-memory chat sessions from the database only after schema setup succeeds.
@@ -157,7 +170,184 @@ async function initializeApp() {
 // Initialize app on startup
 initializeApp().catch(console.error);
 function normalizeToolPreferences(preferences) {
-    return toolRegistry.mergeWithDefaultPreferences(preferences, loadedSettings.ui.defaultToolPreferences);
+    return restrictInternalAgentTools(toolRegistry.mergeWithDefaultPreferences(preferences, loadedSettings.ui.defaultToolPreferences));
+}
+const AGENT_INTERNAL_TOOL_NAMES = new Set([
+    'list',
+    'read',
+    'glob',
+    'grep',
+    'bash',
+    'terminal_list',
+    'terminal_read',
+    'terminal_kill',
+    'write',
+    'edit',
+    'apply_patch',
+]);
+function restrictInternalAgentTools(preferences) {
+    const next = { ...preferences };
+    for (const toolName of AGENT_INTERNAL_TOOL_NAMES) {
+        if (next[toolName]) {
+            next[toolName] = { enabled: false, autoApprove: false };
+        }
+    }
+    return next;
+}
+function buildSpawnedAgentToolPreferences(base) {
+    const preferences = toolRegistry.mergeWithDefaultPreferences(base);
+    const toolApprovals = loadedSettings.remoteWorkspace.toolApprovals || {};
+    for (const [toolName, preference] of Object.entries(preferences)) {
+        const enabled = AGENT_INTERNAL_TOOL_NAMES.has(toolName);
+        preferences[toolName] = {
+            ...preference,
+            enabled,
+            autoApprove: enabled && toolApprovals[toolName] === 'auto-approve',
+        };
+    }
+    if (preferences.create_agent) {
+        preferences.create_agent = { enabled: false, autoApprove: false };
+    }
+    return preferences;
+}
+function normalizeRemoteWorkspaceSettings(input) {
+    const source = input && typeof input === 'object' ? input : {};
+    const enabled = Boolean(source.enabled);
+    const host = String(source.host || '').trim();
+    const username = String(source.username || '').trim();
+    const root = String(source.root || '').trim();
+    const port = source.port !== undefined ? Number(source.port) : 22;
+    const privateKey = source.privateKey ? String(source.privateKey).trim() : '';
+    const privateKeyPath = source.privateKeyPath ? String(source.privateKeyPath).trim() : undefined;
+    const approvalPolicy = source.approvalPolicy === 'auto-approve' ? 'auto-approve' : 'ask';
+    const sourceToolApprovals = source.toolApprovals && typeof source.toolApprovals === 'object'
+        ? source.toolApprovals
+        : {};
+    const toolApprovals = Array.from(AGENT_INTERNAL_TOOL_NAMES).reduce((acc, toolName) => {
+        acc[toolName] = sourceToolApprovals[toolName] === 'auto-approve' || approvalPolicy === 'auto-approve'
+            ? 'auto-approve'
+            : 'ask';
+        return acc;
+    }, {});
+    if (!enabled) {
+        return {
+            ...defaultSettings.remoteWorkspace,
+            approvalPolicy,
+            toolApprovals,
+        };
+    }
+    if (!host ||
+        !username ||
+        !root ||
+        host.startsWith('-') ||
+        username.startsWith('-') ||
+        !/^[A-Za-z0-9._-]+$/.test(username) ||
+        !/^[A-Za-z0-9.-]+$/.test(host) ||
+        !root.startsWith('/') ||
+        (!privateKey && !privateKeyPath)) {
+        return { ...defaultSettings.remoteWorkspace };
+    }
+    return {
+        enabled: true,
+        host,
+        username,
+        root,
+        port: Number.isFinite(port) && port > 0 ? port : 22,
+        privateKey,
+        privateKeyPath,
+        strictHostKeyChecking: source.strictHostKeyChecking !== false,
+        approvalPolicy,
+        toolApprovals,
+    };
+}
+function getConfiguredWorkspaceConfig() {
+    if (!loadedSettings.remoteWorkspace.enabled) {
+        return undefined;
+    }
+    return {
+        type: 'ssh_remote',
+        ssh: {
+            enabled: true,
+            host: loadedSettings.remoteWorkspace.host,
+            username: loadedSettings.remoteWorkspace.username,
+            root: loadedSettings.remoteWorkspace.root,
+            port: loadedSettings.remoteWorkspace.port,
+            privateKey: loadedSettings.remoteWorkspace.privateKey,
+            privateKeyPath: loadedSettings.remoteWorkspace.privateKeyPath,
+            strictHostKeyChecking: loadedSettings.remoteWorkspace.strictHostKeyChecking,
+        },
+    };
+}
+function getWorkspaceConfigForRoot(workspaceRoot) {
+    const configured = getConfiguredWorkspaceConfig();
+    if (!configured?.ssh) {
+        return undefined;
+    }
+    return {
+        type: 'ssh_remote',
+        ssh: {
+            ...configured.ssh,
+            root: workspaceRoot,
+        },
+    };
+}
+function serializeRemoteWorkspaceSettings(settings) {
+    return {
+        ...settings,
+        privateKey: '',
+        hasPrivateKey: Boolean(settings.privateKey),
+    };
+}
+function serializeAgentRun(run) {
+    return {
+        id: run.id,
+        chatId: run.chatId,
+        title: run.title,
+        prompt: run.prompt,
+        workspaceRoot: run.workspaceRoot,
+        status: run.status,
+        steps: run.steps,
+        finalAnswer: run.finalAnswer,
+        error: run.error,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        model: run.model,
+    };
+}
+function normalizeWorkspaceConfig(input) {
+    if (!input || typeof input !== 'object') {
+        return undefined;
+    }
+    const workspace = input;
+    if (workspace.type !== 'ssh_remote' && !workspace.ssh?.enabled) {
+        return undefined;
+    }
+    const ssh = workspace.ssh || workspace;
+    const host = String(ssh.host || '').trim();
+    const username = String(ssh.username || '').trim();
+    const root = String(ssh.root || '').trim();
+    if (!host || !username || !root) {
+        return undefined;
+    }
+    if (host.startsWith('-') || username.startsWith('-') || !/^[A-Za-z0-9._-]+$/.test(username) || !/^[A-Za-z0-9.-]+$/.test(host)) {
+        return undefined;
+    }
+    if (!root.startsWith('/')) {
+        return undefined;
+    }
+    const port = ssh.port !== undefined ? Number(ssh.port) : 22;
+    return {
+        type: 'ssh_remote',
+        ssh: {
+            enabled: true,
+            host,
+            username,
+            root,
+            port: Number.isFinite(port) && port > 0 ? port : 22,
+            privateKeyPath: ssh.privateKeyPath ? String(ssh.privateKeyPath).trim() : undefined,
+            strictHostKeyChecking: ssh.strictHostKeyChecking !== false,
+        },
+    };
 }
 const chatSessions = new Map();
 const pendingApprovals = new Map();
@@ -202,6 +392,19 @@ function sanitizeAgentStateForPersistence(agentState) {
         partialFinalAnswer: truncateForPersistence(typeof parsedAgentState.partialFinalAnswer === 'string' ? parsedAgentState.partialFinalAnswer : undefined, MAX_PERSISTED_PARTIAL_ANSWER_CHARS),
     };
 }
+function sanitizeAgentRunsForPersistence(agentRuns) {
+    const parsedAgentRuns = parseJsonIfNeeded(agentRuns);
+    if (!Array.isArray(parsedAgentRuns)) {
+        return [];
+    }
+    return parsedAgentRuns.map((run) => ({
+        ...run,
+        status: ['running', 'completed', 'failed', 'cancelled'].includes(run.status) ? run.status : 'failed',
+        steps: sanitizeAgentStepsForPersistence(run.steps),
+        finalAnswer: truncateForPersistence(typeof run.finalAnswer === 'string' ? run.finalAnswer : undefined, MAX_PERSISTED_PARTIAL_ANSWER_CHARS) ?? null,
+        error: truncateForPersistence(typeof run.error === 'string' ? run.error : undefined, MAX_PERSISTED_STEP_CONTENT_CHARS),
+    }));
+}
 function normalizeChatMessages(messages, agentState, fallbackModel) {
     const normalizedMessages = (messages ?? []).map((message) => {
         if (message.id) {
@@ -239,6 +442,9 @@ function normalizeChatSession(session) {
     session.approvalMode = normalizedApprovalMode;
     const { messages, changed: messagesChanged } = normalizeChatMessages(session.messages, session.agentState, llamaConfig.model);
     session.messages = messages;
+    if (!Array.isArray(session.agentRuns)) {
+        session.agentRuns = [];
+    }
     return toolPreferencesChanged || approvalModeChanged || messagesChanged;
 }
 function getChatNameFromQuery(query) {
@@ -271,6 +477,7 @@ async function loadChats() {
                         content: msg.content,
                         model: msg.model || undefined,
                         agentSteps: sanitizeAgentStepsForPersistence(msg.agent_steps),
+                        agentRunId: msg.content.startsWith('__operator_agent_run__:') ? msg.content.slice('__operator_agent_run__:'.length).trim() : undefined,
                     })),
                     name: persistedChat.name,
                     createdAt: persistedChat.created_at.toISOString(),
@@ -278,6 +485,7 @@ async function loadChats() {
                     agentState: sanitizeAgentStateForPersistence(persistedChat.agent_state),
                     toolPreferences: persistedChat.tool_preferences || {},
                     approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
+                    agentRuns: sanitizeAgentRunsForPersistence(persistedChat.agent_state?.agentRuns),
                 };
                 const sessionChanged = normalizeChatSession(session);
                 chatSessions.set(persistedChat.id, session);
@@ -299,7 +507,10 @@ async function saveChat(session) {
         if (existingChat) {
             await repositories_1.chatRepository.update(session.id, {
                 name: session.name,
-                agent_state: sanitizeAgentStateForPersistence(session.agentState),
+                agent_state: {
+                    ...sanitizeAgentStateForPersistence(session.agentState),
+                    agentRuns: sanitizeAgentRunsForPersistence(session.agentRuns),
+                },
                 tool_preferences: session.toolPreferences,
                 approval_mode: session.approvalMode,
             });
@@ -443,6 +654,7 @@ function createSessionForUser(userId, name = 'Scheduled Task') {
         updatedAt: now,
         toolPreferences: normalizeToolPreferences(),
         approvalMode: { alwaysApprove: false },
+        agentRuns: [],
     };
     chatSessions.set(chatId, session);
     return session;
@@ -538,7 +750,7 @@ async function executeScheduledTask(task, force = false) {
     session.currentAgent = agent;
     try {
         const userMemories = (await memoryManager.getMemories(task.user_id)).map(m => m.content);
-        const result = await agent.run(session.id, scheduledMessage, session.sandboxId, task.user_id, conversationHistory, userMemories, session.toolPreferences, session.approvalMode);
+        const result = await agent.run(session.id, scheduledMessage, session.sandboxId, task.user_id, conversationHistory, userMemories, session.toolPreferences, session.approvalMode, getConfiguredWorkspaceConfig());
         session.agentState = {
             steps: result.steps,
             isComplete: result.isComplete,
@@ -622,6 +834,99 @@ function startTaskScheduler() {
     }, 30000);
     pollScheduledTasks().catch(console.error);
 }
+async function startChatAgentRun(session, userId, request, model, language, sourceSocketChatId) {
+    const workspace = getWorkspaceConfigForRoot(request.workspaceRoot);
+    if (!workspace?.ssh?.enabled) {
+        throw new Error('Remote workspace is not configured in Settings.');
+    }
+    const now = new Date().toISOString();
+    const run = {
+        id: crypto_1.default.randomUUID(),
+        chatId: session.id,
+        userId,
+        title: request.title,
+        prompt: request.prompt,
+        workspaceRoot: request.workspaceRoot,
+        status: 'running',
+        steps: [],
+        finalAnswer: null,
+        createdAt: now,
+        updatedAt: now,
+        model,
+    };
+    session.agentRuns.push(run);
+    session.messages.push({
+        id: crypto_1.default.randomUUID(),
+        role: 'assistant',
+        content: `__operator_agent_run__:${run.id}`,
+        model,
+        agentSteps: [],
+        agentRunId: run.id,
+    });
+    session.updatedAt = now;
+    await saveChat(session);
+    io.to(sourceSocketChatId).emit('message', {
+        role: 'assistant',
+        content: `__operator_agent_run__:${run.id}`,
+        model,
+        agentRunId: run.id,
+    });
+    io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+    const agentToolPreferences = buildSpawnedAgentToolPreferences(session.toolPreferences);
+    const agent = new ReActAgent_1.ReActAgent(llamaClient, toolRegistry, 15, {
+        onStep: (step) => {
+            run.steps.push(step);
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+        },
+        onFinalAnswerToken: (token) => {
+            run.finalAnswer = `${run.finalAnswer || ''}${token}`;
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+        },
+        onReasoningToken: () => { },
+        onError: (error) => {
+            run.status = 'failed';
+            run.error = error;
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+        },
+        onToolApprovalRequest: async (approvalRequest) => {
+            if (loadedSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
+                return { approved: true, reason: 'approved' };
+            }
+            return await new Promise((resolve) => {
+                pendingApprovals.set(approvalRequest.approvalId, { chatId: sourceSocketChatId, request: approvalRequest, resolve });
+                io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
+            });
+        },
+        onStepSave: async () => {
+            await saveChat(session);
+        },
+    }, null, language, model);
+    void (async () => {
+        try {
+            const result = await agent.run(session.id, request.prompt, session.sandboxId, userId, [], (await memoryManager.getMemories(userId)).map((memory) => memory.content), agentToolPreferences, { alwaysApprove: false }, workspace);
+            run.steps = result.steps;
+            run.finalAnswer = result.finalAnswer;
+            run.status = result.isComplete ? 'completed' : 'failed';
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            await saveChat(session);
+        }
+        catch (error) {
+            run.status = 'failed';
+            run.error = error instanceof Error ? error.message : String(error);
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            await saveChat(session);
+        }
+        finally {
+            clearPendingApprovalsForChat(sourceSocketChatId);
+        }
+    })();
+    return run.id;
+}
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
 app.get('/api/settings', (req, res) => {
     res.json({
@@ -631,14 +936,25 @@ app.get('/api/settings', (req, res) => {
             selectedModel: loadedSettings.ui.selectedModel,
             defaultToolPreferences: normalizeToolPreferences(loadedSettings.ui.defaultToolPreferences),
         },
+        remoteWorkspace: serializeRemoteWorkspaceSettings(loadedSettings.remoteWorkspace),
     });
 });
 app.post('/api/settings', async (req, res) => {
-    const { ui } = req.body;
+    const { ui, remoteWorkspace } = req.body;
     if (ui) {
         loadedSettings.ui = { ...loadedSettings.ui, ...ui };
         loadedSettings.ui.defaultToolPreferences = normalizeToolPreferences(loadedSettings.ui.defaultToolPreferences);
         await repositories_1.settingsRepository.setUiSettings(loadedSettings.ui);
+    }
+    if (remoteWorkspace !== undefined) {
+        const nextRemoteWorkspace = normalizeRemoteWorkspaceSettings({
+            ...remoteWorkspace,
+            privateKey: remoteWorkspace.privateKey === ''
+                ? loadedSettings.remoteWorkspace.privateKey
+                : remoteWorkspace.privateKey,
+        });
+        loadedSettings.remoteWorkspace = nextRemoteWorkspace;
+        await repositories_1.settingsRepository.setRemoteWorkspace(nextRemoteWorkspace);
     }
     res.json({ success: true });
 });
@@ -646,6 +962,18 @@ app.post('/api/settings', async (req, res) => {
 app.get('/api/tasks', auth_1.protect, async (req, res) => {
     const tasks = await repositories_1.taskRepository.findByUserId(req.user.id);
     res.json(tasks.map(serializeTask));
+});
+app.get('/api/agents', auth_1.protect, (req, res) => {
+    const userId = req.user.id;
+    const agents = Array.from(chatSessions.values())
+        .filter((session) => session.userId === userId)
+        .flatMap((session) => session.agentRuns.map((run) => ({
+        ...serializeAgentRun(run),
+        chatName: session.name,
+        stepCount: run.steps.length,
+    })))
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    res.json(agents);
 });
 app.post('/api/tasks', auth_1.protect, async (req, res) => {
     const { title, prompt, scheduleType, runAt, intervalMinutes, daysOfWeek, timeOfDay, timezone, chatId, model, toolPreferences, approvalMode, reasoningEffort, } = req.body;
@@ -791,6 +1119,7 @@ app.post('/api/chat', auth_1.protect, (req, res) => {
         approvalMode: {
             alwaysApprove: false,
         },
+        agentRuns: [],
     };
     chatSessions.set(chatId, session);
     saveChats();
@@ -926,6 +1255,7 @@ app.get('/api/chat/:chatId/messages', auth_1.protect, (req, res) => {
         toolPreferences: normalizeToolPreferences(session.toolPreferences),
         approvalMode: session.approvalMode,
         pendingApproval: getPendingApprovalPayloadForChat(chatId),
+        agentRuns: session.agentRuns.map(serializeAgentRun),
     });
 });
 // Edit message content
@@ -1143,6 +1473,7 @@ io.on('connection', (socket) => {
             socket.emit('tool-approval-required', pendingApproval);
             console.log(`Re-emitting pending approval ${pendingApproval.approvalId} to socket ${socket.id} for chat ${chatId}`);
         }
+        socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
     });
     socket.on('send-message', async (data) => {
         if (!currentUserId) {
@@ -1242,6 +1573,9 @@ io.on('connection', (socket) => {
                     io.to(chatId).emit('tool-approval-required', { ...request, chatId });
                 });
             },
+            onCreateAgentRun: async (request) => {
+                return startChatAgentRun(session, currentUserId, request, responseModel || llamaConfig.model || '', language, chatId);
+            },
             onStepSave: (savedChatId, step, allSteps) => {
                 // Persist steps to database immediately after each step
                 const session = chatSessions.get(savedChatId);
@@ -1312,7 +1646,7 @@ io.on('connection', (socket) => {
         const userMemories = (await memoryManager.getMemories(currentUserId)).map(m => m.content);
         try {
             // Run the agent with conversation history and memories
-            const result = await agent.run(chatId, message, session.sandboxId, currentUserId, conversationHistory, userMemories, session.toolPreferences, session.approvalMode);
+            const result = await agent.run(chatId, message, session.sandboxId, currentUserId, conversationHistory, userMemories, session.toolPreferences, session.approvalMode, getConfiguredWorkspaceConfig());
             // Store agent state
             session.agentState = {
                 steps: result.steps,
@@ -1449,7 +1783,7 @@ app.get('/api/models', async (req, res) => {
 });
 // Get available tools
 app.get('/api/tools', (req, res) => {
-    res.json(toolRegistry.getTools());
+    res.json(toolRegistry.getPublicTools());
 });
 // Load built-in personalities from JSON file
 function loadBuiltInPersonalities() {

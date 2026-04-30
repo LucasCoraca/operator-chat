@@ -81,6 +81,22 @@ class SettingsRepository {
     async setMcpServers(servers) {
         await this.set('mcpServers', servers);
     }
+    async getRemoteWorkspace() {
+        return this.get('remoteWorkspace') || {
+            enabled: false,
+            host: '',
+            port: 22,
+            username: '',
+            root: '',
+            privateKey: '',
+            strictHostKeyChecking: true,
+            approvalPolicy: 'ask',
+            toolApprovals: {},
+        };
+    }
+    async setRemoteWorkspace(config) {
+        await this.set('remoteWorkspace', config);
+    }
 }
 exports.SettingsRepository = SettingsRepository;
 exports.settingsRepository = new SettingsRepository();

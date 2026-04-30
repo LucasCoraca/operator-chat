@@ -13,7 +13,8 @@ import { SandboxManager } from './services/sandboxManager';
 import { MemoryManager } from './services/memoryManager';
 import { MCPClientManager, MCPServerConfig } from './services/mcpClientManager';
 import { ToolRegistry, ChatToolPreference } from './tools';
-import { ReActAgent, AgentStep, ToolApprovalRequest, ToolApprovalResponse } from './agent/ReActAgent';
+import { ReActAgent, AgentStep, ToolApprovalRequest, ToolApprovalResponse, CreateAgentRunRequest } from './agent/ReActAgent';
+import { WorkspaceConfig } from './services/workspaceRuntime';
 import { protect, registerUser, loginUser, getMe, AuthRequest } from './auth';
 import { initializeDatabase, testConnection } from './db';
 import { chatRepository, personalityRepository, settingsRepository, taskRepository, ScheduledTask } from './repositories';
@@ -92,6 +93,19 @@ interface MCPServersConfig {
   [serverName: string]: MCPServerConfig;
 }
 
+interface RemoteWorkspaceSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  username: string;
+  root: string;
+  privateKey?: string;
+  privateKeyPath?: string;
+  strictHostKeyChecking: boolean;
+  approvalPolicy: 'ask' | 'auto-approve';
+  toolApprovals: Record<string, 'ask' | 'auto-approve'>;
+}
+
 // Default settings
 const defaultSettings = {
   llama: {
@@ -108,6 +122,17 @@ const defaultSettings = {
     defaultToolPreferences: {} as Record<string, ChatToolPreference>,
   },
   mcpServers: {} as MCPServersConfig,
+  remoteWorkspace: {
+    enabled: false,
+    host: '',
+    port: 22,
+    username: '',
+    root: '',
+    privateKey: '',
+    strictHostKeyChecking: true,
+    approvalPolicy: 'ask',
+    toolApprovals: {},
+  } as RemoteWorkspaceSettings,
 };
 
 // Settings will be loaded asynchronously
@@ -165,11 +190,13 @@ async function initializeApp(): Promise<void> {
     // Load UI and MCP settings from database (llama/searxng come from env vars)
     const uiSettings = await settingsRepository.getUiSettings();
     const mcpServersSettings = await settingsRepository.getMcpServers();
+    const remoteWorkspaceSettings = await settingsRepository.getRemoteWorkspace();
 
     loadedSettings = {
       ...defaultSettings,
       ui: uiSettings || defaultSettings.ui,
       mcpServers: mcpServersSettings || defaultSettings.mcpServers,
+      remoteWorkspace: normalizeRemoteWorkspaceSettings(remoteWorkspaceSettings),
     };
     loadedSettings.ui.defaultToolPreferences = toolRegistry.mergeWithDefaultPreferences(
       loadedSettings.ui.defaultToolPreferences
@@ -198,10 +225,206 @@ initializeApp().catch(console.error);
 function normalizeToolPreferences(
   preferences?: Record<string, ChatToolPreference>
 ): Record<string, ChatToolPreference> {
-  return toolRegistry.mergeWithDefaultPreferences(
+  return restrictInternalAgentTools(toolRegistry.mergeWithDefaultPreferences(
     preferences,
     loadedSettings.ui.defaultToolPreferences
-  );
+  ));
+}
+
+const AGENT_INTERNAL_TOOL_NAMES = new Set([
+  'list',
+  'read',
+  'glob',
+  'grep',
+  'bash',
+  'terminal_list',
+  'terminal_read',
+  'terminal_kill',
+  'write',
+  'edit',
+  'apply_patch',
+]);
+
+function restrictInternalAgentTools(preferences: Record<string, ChatToolPreference>): Record<string, ChatToolPreference> {
+  const next = { ...preferences };
+  for (const toolName of AGENT_INTERNAL_TOOL_NAMES) {
+    if (next[toolName]) {
+      next[toolName] = { enabled: false, autoApprove: false };
+    }
+  }
+  return next;
+}
+
+function buildSpawnedAgentToolPreferences(base?: Record<string, ChatToolPreference>): Record<string, ChatToolPreference> {
+  const preferences = toolRegistry.mergeWithDefaultPreferences(base);
+  const toolApprovals = loadedSettings.remoteWorkspace.toolApprovals || {};
+  for (const [toolName, preference] of Object.entries(preferences)) {
+    const enabled = AGENT_INTERNAL_TOOL_NAMES.has(toolName);
+    preferences[toolName] = {
+      ...preference,
+      enabled,
+      autoApprove: enabled && toolApprovals[toolName] === 'auto-approve',
+    };
+  }
+  if (preferences.create_agent) {
+    preferences.create_agent = { enabled: false, autoApprove: false };
+  }
+  return preferences;
+}
+
+function normalizeRemoteWorkspaceSettings(input: unknown): RemoteWorkspaceSettings {
+  const source = input && typeof input === 'object' ? input as any : {};
+  const enabled = Boolean(source.enabled);
+  const host = String(source.host || '').trim();
+  const username = String(source.username || '').trim();
+  const root = String(source.root || '').trim();
+  const port = source.port !== undefined ? Number(source.port) : 22;
+  const privateKey = source.privateKey ? String(source.privateKey).trim() : '';
+  const privateKeyPath = source.privateKeyPath ? String(source.privateKeyPath).trim() : undefined;
+  const approvalPolicy = source.approvalPolicy === 'auto-approve' ? 'auto-approve' : 'ask';
+  const sourceToolApprovals = source.toolApprovals && typeof source.toolApprovals === 'object'
+    ? source.toolApprovals as Record<string, unknown>
+    : {};
+  const toolApprovals = Array.from(AGENT_INTERNAL_TOOL_NAMES).reduce((acc, toolName) => {
+    acc[toolName] = sourceToolApprovals[toolName] === 'auto-approve' || approvalPolicy === 'auto-approve'
+      ? 'auto-approve'
+      : 'ask';
+    return acc;
+  }, {} as Record<string, 'ask' | 'auto-approve'>);
+
+  if (!enabled) {
+    return {
+      ...defaultSettings.remoteWorkspace,
+      approvalPolicy,
+      toolApprovals,
+    };
+  }
+
+  if (
+    !host ||
+    !username ||
+    !root ||
+    host.startsWith('-') ||
+    username.startsWith('-') ||
+    !/^[A-Za-z0-9._-]+$/.test(username) ||
+    !/^[A-Za-z0-9.-]+$/.test(host) ||
+    !root.startsWith('/') ||
+    (!privateKey && !privateKeyPath)
+  ) {
+    return { ...defaultSettings.remoteWorkspace };
+  }
+
+  return {
+    enabled: true,
+    host,
+    username,
+    root,
+    port: Number.isFinite(port) && port > 0 ? port : 22,
+    privateKey,
+    privateKeyPath,
+    strictHostKeyChecking: source.strictHostKeyChecking !== false,
+    approvalPolicy,
+    toolApprovals,
+  };
+}
+
+function getConfiguredWorkspaceConfig(): WorkspaceConfig | undefined {
+  if (!loadedSettings.remoteWorkspace.enabled) {
+    return undefined;
+  }
+
+  return {
+    type: 'ssh_remote',
+    ssh: {
+      enabled: true,
+      host: loadedSettings.remoteWorkspace.host,
+      username: loadedSettings.remoteWorkspace.username,
+      root: loadedSettings.remoteWorkspace.root,
+      port: loadedSettings.remoteWorkspace.port,
+      privateKey: loadedSettings.remoteWorkspace.privateKey,
+      privateKeyPath: loadedSettings.remoteWorkspace.privateKeyPath,
+      strictHostKeyChecking: loadedSettings.remoteWorkspace.strictHostKeyChecking,
+    },
+  };
+}
+
+function getWorkspaceConfigForRoot(workspaceRoot: string): WorkspaceConfig | undefined {
+  const configured = getConfiguredWorkspaceConfig();
+  if (!configured?.ssh) {
+    return undefined;
+  }
+
+  return {
+    type: 'ssh_remote',
+    ssh: {
+      ...configured.ssh,
+      root: workspaceRoot,
+    },
+  };
+}
+
+function serializeRemoteWorkspaceSettings(settings: RemoteWorkspaceSettings): RemoteWorkspaceSettings & { hasPrivateKey: boolean } {
+  return {
+    ...settings,
+    privateKey: '',
+    hasPrivateKey: Boolean(settings.privateKey),
+  };
+}
+
+function serializeAgentRun(run: AgentRun) {
+  return {
+    id: run.id,
+    chatId: run.chatId,
+    title: run.title,
+    prompt: run.prompt,
+    workspaceRoot: run.workspaceRoot,
+    status: run.status,
+    steps: run.steps,
+    finalAnswer: run.finalAnswer,
+    error: run.error,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    model: run.model,
+  };
+}
+
+function normalizeWorkspaceConfig(input: unknown): WorkspaceConfig | undefined {
+  if (!input || typeof input !== 'object') {
+    return undefined;
+  }
+
+  const workspace = input as any;
+  if (workspace.type !== 'ssh_remote' && !workspace.ssh?.enabled) {
+    return undefined;
+  }
+
+  const ssh = workspace.ssh || workspace;
+  const host = String(ssh.host || '').trim();
+  const username = String(ssh.username || '').trim();
+  const root = String(ssh.root || '').trim();
+  if (!host || !username || !root) {
+    return undefined;
+  }
+  if (host.startsWith('-') || username.startsWith('-') || !/^[A-Za-z0-9._-]+$/.test(username) || !/^[A-Za-z0-9.-]+$/.test(host)) {
+    return undefined;
+  }
+  if (!root.startsWith('/')) {
+    return undefined;
+  }
+
+  const port = ssh.port !== undefined ? Number(ssh.port) : 22;
+  return {
+    type: 'ssh_remote',
+    ssh: {
+      enabled: true,
+      host,
+      username,
+      root,
+      port: Number.isFinite(port) && port > 0 ? port : 22,
+      privateKeyPath: ssh.privateKeyPath ? String(ssh.privateKeyPath).trim() : undefined,
+      strictHostKeyChecking: ssh.strictHostKeyChecking !== false,
+    },
+  };
 }
 
 // Chat sessions: Map<chatId, { sandboxId, messages, name }>
@@ -211,6 +434,23 @@ interface ChatMessage {
   content: string;
   model?: string;
   agentSteps?: AgentStep[];
+  agentRunId?: string;
+}
+
+interface AgentRun {
+  id: string;
+  chatId: string;
+  userId: string;
+  title: string;
+  prompt: string;
+  workspaceRoot: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  steps: AgentStep[];
+  finalAnswer: string | null;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  model?: string;
 }
 
 interface ChatSession {
@@ -232,6 +472,7 @@ interface ChatSession {
   approvalMode: {
     alwaysApprove: boolean;
   };
+  agentRuns: AgentRun[];
   currentAgent?: ReActAgent; // Track the current running agent
 }
 const chatSessions = new Map<string, ChatSession>();
@@ -300,6 +541,24 @@ function sanitizeAgentStateForPersistence(agentState: unknown): ChatSession['age
   };
 }
 
+function sanitizeAgentRunsForPersistence(agentRuns: unknown): AgentRun[] {
+  const parsedAgentRuns = parseJsonIfNeeded(agentRuns);
+  if (!Array.isArray(parsedAgentRuns)) {
+    return [];
+  }
+
+  return parsedAgentRuns.map((run) => ({
+    ...run,
+    status: ['running', 'completed', 'failed', 'cancelled'].includes(run.status) ? run.status : 'failed',
+    steps: sanitizeAgentStepsForPersistence(run.steps),
+    finalAnswer: truncateForPersistence(
+      typeof run.finalAnswer === 'string' ? run.finalAnswer : undefined,
+      MAX_PERSISTED_PARTIAL_ANSWER_CHARS
+    ) ?? null,
+    error: truncateForPersistence(typeof run.error === 'string' ? run.error : undefined, MAX_PERSISTED_STEP_CONTENT_CHARS),
+  }));
+}
+
 function normalizeChatMessages(
   messages: ChatMessage[] | undefined,
   agentState?: ChatSession['agentState'],
@@ -353,6 +612,9 @@ function normalizeChatSession(session: ChatSession): boolean {
     llamaConfig.model
   );
   session.messages = messages;
+  if (!Array.isArray(session.agentRuns)) {
+    session.agentRuns = [];
+  }
 
   return toolPreferencesChanged || approvalModeChanged || messagesChanged;
 }
@@ -390,6 +652,7 @@ async function loadChats(): Promise<void> {
             content: msg.content,
             model: msg.model || undefined,
             agentSteps: sanitizeAgentStepsForPersistence(msg.agent_steps),
+            agentRunId: msg.content.startsWith('__operator_agent_run__:') ? msg.content.slice('__operator_agent_run__:'.length).trim() : undefined,
           })),
           name: persistedChat.name,
           createdAt: persistedChat.created_at.toISOString(),
@@ -397,6 +660,7 @@ async function loadChats(): Promise<void> {
           agentState: sanitizeAgentStateForPersistence(persistedChat.agent_state),
           toolPreferences: persistedChat.tool_preferences || {},
           approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
+          agentRuns: sanitizeAgentRunsForPersistence((persistedChat.agent_state as any)?.agentRuns),
         };
         const sessionChanged = normalizeChatSession(session);
         chatSessions.set(persistedChat.id, session);
@@ -418,7 +682,10 @@ async function saveChat(session: ChatSession): Promise<void> {
     if (existingChat) {
       await chatRepository.update(session.id, {
         name: session.name,
-        agent_state: sanitizeAgentStateForPersistence(session.agentState),
+        agent_state: {
+          ...sanitizeAgentStateForPersistence(session.agentState),
+          agentRuns: sanitizeAgentRunsForPersistence(session.agentRuns),
+        },
         tool_preferences: session.toolPreferences,
         approval_mode: session.approvalMode,
       });
@@ -570,6 +837,7 @@ function createSessionForUser(userId: string, name = 'Scheduled Task'): ChatSess
     updatedAt: now,
     toolPreferences: normalizeToolPreferences(),
     approvalMode: { alwaysApprove: false },
+    agentRuns: [],
   };
   chatSessions.set(chatId, session);
   return session;
@@ -684,7 +952,8 @@ async function executeScheduledTask(task: ScheduledTask, force = false): Promise
       conversationHistory,
       userMemories,
       session.toolPreferences,
-      session.approvalMode
+      session.approvalMode,
+      getConfiguredWorkspaceConfig()
     );
 
     session.agentState = {
@@ -774,6 +1043,124 @@ function startTaskScheduler(): void {
   pollScheduledTasks().catch(console.error);
 }
 
+async function startChatAgentRun(
+  session: ChatSession,
+  userId: string,
+  request: CreateAgentRunRequest,
+  model: string,
+  language: string | undefined,
+  sourceSocketChatId: string
+): Promise<string> {
+  const workspace = getWorkspaceConfigForRoot(request.workspaceRoot);
+  if (!workspace?.ssh?.enabled) {
+    throw new Error('Remote workspace is not configured in Settings.');
+  }
+
+  const now = new Date().toISOString();
+  const run: AgentRun = {
+    id: crypto.randomUUID(),
+    chatId: session.id,
+    userId,
+    title: request.title,
+    prompt: request.prompt,
+    workspaceRoot: request.workspaceRoot,
+    status: 'running',
+    steps: [],
+    finalAnswer: null,
+    createdAt: now,
+    updatedAt: now,
+    model,
+  };
+
+  session.agentRuns.push(run);
+  session.messages.push({
+    id: crypto.randomUUID(),
+    role: 'assistant',
+    content: `__operator_agent_run__:${run.id}`,
+    model,
+    agentSteps: [],
+    agentRunId: run.id,
+  });
+  session.updatedAt = now;
+  await saveChat(session);
+
+  io.to(sourceSocketChatId).emit('message', {
+    role: 'assistant',
+    content: `__operator_agent_run__:${run.id}`,
+    model,
+    agentRunId: run.id,
+  });
+  io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+
+  const agentToolPreferences = buildSpawnedAgentToolPreferences(session.toolPreferences);
+
+  const agent = new ReActAgent(llamaClient, toolRegistry, 15, {
+    onStep: (step: AgentStep) => {
+      run.steps.push(step);
+      run.updatedAt = new Date().toISOString();
+      io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+    },
+    onFinalAnswerToken: (token: string) => {
+      run.finalAnswer = `${run.finalAnswer || ''}${token}`;
+      run.updatedAt = new Date().toISOString();
+      io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+    },
+    onReasoningToken: () => {},
+    onError: (error: string) => {
+      run.status = 'failed';
+      run.error = error;
+      run.updatedAt = new Date().toISOString();
+      io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+    },
+    onToolApprovalRequest: async (approvalRequest: ToolApprovalRequest) => {
+      if (loadedSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
+        return { approved: true, reason: 'approved' };
+      }
+
+      return await new Promise<ToolApprovalResponse>((resolve) => {
+        pendingApprovals.set(approvalRequest.approvalId, { chatId: sourceSocketChatId, request: approvalRequest, resolve });
+        io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
+      });
+    },
+    onStepSave: async () => {
+      await saveChat(session);
+    },
+  }, null, language, model);
+
+  void (async () => {
+    try {
+      const result = await agent.run(
+        session.id,
+        request.prompt,
+        session.sandboxId,
+        userId,
+        [],
+        (await memoryManager.getMemories(userId)).map((memory) => memory.content),
+        agentToolPreferences,
+        { alwaysApprove: false },
+        workspace
+      );
+
+      run.steps = result.steps;
+      run.finalAnswer = result.finalAnswer;
+      run.status = result.isComplete ? 'completed' : 'failed';
+      run.updatedAt = new Date().toISOString();
+      io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+      await saveChat(session);
+    } catch (error) {
+      run.status = 'failed';
+      run.error = error instanceof Error ? error.message : String(error);
+      run.updatedAt = new Date().toISOString();
+      io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+      await saveChat(session);
+    } finally {
+      clearPendingApprovalsForChat(sourceSocketChatId);
+    }
+  })();
+
+  return run.id;
+}
+
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
 app.get('/api/settings', (req, res) => {
   res.json({
@@ -783,11 +1170,12 @@ app.get('/api/settings', (req, res) => {
       selectedModel: loadedSettings.ui.selectedModel,
       defaultToolPreferences: normalizeToolPreferences(loadedSettings.ui.defaultToolPreferences),
     },
+    remoteWorkspace: serializeRemoteWorkspaceSettings(loadedSettings.remoteWorkspace),
   });
 });
 
 app.post('/api/settings', async (req, res) => {
-  const { ui } = req.body;
+  const { ui, remoteWorkspace } = req.body;
 
   if (ui) {
     loadedSettings.ui = { ...loadedSettings.ui, ...ui };
@@ -797,6 +1185,17 @@ app.post('/api/settings', async (req, res) => {
     await settingsRepository.setUiSettings(loadedSettings.ui);
   }
 
+  if (remoteWorkspace !== undefined) {
+    const nextRemoteWorkspace = normalizeRemoteWorkspaceSettings({
+      ...remoteWorkspace,
+      privateKey: remoteWorkspace.privateKey === ''
+        ? loadedSettings.remoteWorkspace.privateKey
+        : remoteWorkspace.privateKey,
+    });
+    loadedSettings.remoteWorkspace = nextRemoteWorkspace;
+    await settingsRepository.setRemoteWorkspace(nextRemoteWorkspace);
+  }
+
   res.json({ success: true });
 });
 
@@ -804,6 +1203,20 @@ app.post('/api/settings', async (req, res) => {
 app.get('/api/tasks', protect, async (req: AuthRequest, res) => {
   const tasks = await taskRepository.findByUserId(req.user!.id);
   res.json(tasks.map(serializeTask));
+});
+
+app.get('/api/agents', protect, (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const agents = Array.from(chatSessions.values())
+    .filter((session) => session.userId === userId)
+    .flatMap((session) => session.agentRuns.map((run) => ({
+      ...serializeAgentRun(run),
+      chatName: session.name,
+      stepCount: run.steps.length,
+    })))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+  res.json(agents);
 });
 
 app.post('/api/tasks', protect, async (req: AuthRequest, res) => {
@@ -982,6 +1395,7 @@ app.post('/api/chat', protect, (req: AuthRequest, res) => {
     approvalMode: {
       alwaysApprove: false,
     },
+    agentRuns: [],
   };
 
   chatSessions.set(chatId, session);
@@ -1156,6 +1570,7 @@ app.get('/api/chat/:chatId/messages', protect, (req: AuthRequest, res) => {
     toolPreferences: normalizeToolPreferences(session.toolPreferences),
     approvalMode: session.approvalMode,
     pendingApproval: getPendingApprovalPayloadForChat(chatId),
+    agentRuns: session.agentRuns.map(serializeAgentRun),
   });
 });
 
@@ -1412,6 +1827,8 @@ io.on('connection', (socket) => {
       socket.emit('tool-approval-required', pendingApproval);
       console.log(`Re-emitting pending approval ${pendingApproval.approvalId} to socket ${socket.id} for chat ${chatId}`);
     }
+
+    socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
   });
 
   socket.on('send-message', async (data: {
@@ -1534,6 +1951,9 @@ io.on('connection', (socket) => {
           io.to(chatId).emit('tool-approval-required', { ...request, chatId });
         });
       },
+      onCreateAgentRun: async (request: CreateAgentRunRequest) => {
+        return startChatAgentRun(session, currentUserId!, request, responseModel || llamaConfig.model || '', language, chatId);
+      },
       onStepSave: (savedChatId: string, step: AgentStep, allSteps: AgentStep[]) => {
         // Persist steps to database immediately after each step
         const session = chatSessions.get(savedChatId);
@@ -1620,7 +2040,8 @@ io.on('connection', (socket) => {
         conversationHistory,
         userMemories,
         session.toolPreferences,
-        session.approvalMode
+        session.approvalMode,
+        getConfiguredWorkspaceConfig()
       );
 
       // Store agent state
@@ -1778,7 +2199,7 @@ app.get('/api/models', async (req, res) => {
 
 // Get available tools
 app.get('/api/tools', (req, res) => {
-  res.json(toolRegistry.getTools());
+  res.json(toolRegistry.getPublicTools());
 });
 
 // Load built-in personalities from JSON file

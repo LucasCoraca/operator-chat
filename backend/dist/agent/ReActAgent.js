@@ -357,7 +357,8 @@ class ReActAgent {
     isSyntheticSummaryObservation(content) {
         return content.startsWith('## COMPOSING FINAL ANSWER') ||
             content.startsWith('## RESEARCH PHASE COMPLETE') ||
-            content.startsWith('## ITERATION LIMIT REACHED');
+            content.startsWith('## ITERATION LIMIT REACHED') ||
+            content.startsWith('__agent_run_started__:');
     }
     getComposableObservations(state) {
         const observations = [];
@@ -481,7 +482,7 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
         };
         return languageInstructions[this.language] || languageInstructions['en'];
     }
-    getSystemPrompt(forceFinalAnswer = false, toolPreferences, memories = [], currentIteration = 0) {
+    getSystemPrompt(forceFinalAnswer = false, toolPreferences, memories = [], currentIteration = 0, workspace) {
         const now = new Date();
         const dateStr = now.toLocaleDateString('en-US', {
             weekday: 'long',
@@ -498,6 +499,13 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
         const dateTime = `${dateStr}, ${timeStr}`;
         const enabledToolNames = this.getEnabledToolNames(toolPreferences);
         const toolsAvailable = this.toolRegistry.getFilteredTools(enabledToolNames).length > 0;
+        const canCreateAgent = enabledToolNames.includes('create_agent');
+        const remoteToolNames = enabledToolNames.filter((toolName) => ['list', 'read', 'glob', 'grep', 'bash', 'terminal_list', 'terminal_read', 'terminal_kill', 'write', 'edit', 'apply_patch'].includes(toolName));
+        const workspaceSection = workspace?.type === 'ssh_remote' && workspace.ssh?.enabled
+            ? canCreateAgent
+                ? `\n\n## ACTIVE WORKSPACE\nThe system has SSH credentials for a remote environment.\n- Default host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Default workspace root: ${workspace.ssh.root}\n- For any request to run commands, inspect a codebase, edit files, implement changes, fix bugs, run tests, continue previous remote work, or delegate coding work, call \`create_agent\` with a title, a complete prompt, and the absolute remote workspaceRoot. Do not tell the user to run commands manually.\n- The created agent is separate from this chat response and its live trace will appear in the conversation.\n- Answer directly only for conceptual questions that do not require remote workspace inspection, command execution, or file edits.\n`
+                : `\n\n## ACTIVE WORKSPACE\nYou are the spawned SSH coding agent for a remote environment.\n- Host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Workspace root: ${workspace.ssh.root}\n- Your enabled remote tools are: ${remoteToolNames.join(', ') || 'none'}.\n- Continue using the remote tools to inspect files, run commands, edit files, and verify the task. Do not tell the user to run commands manually when a tool can do it.\n- Use \`list\`, \`glob\`, \`grep\`, and \`read\` for inspection. Use \`edit\`, \`write\`, and \`apply_patch\` for file modifications. Use \`bash\` for builds, tests, and commands.\n- If a \`bash\` command starts a long-running process, it may return a background terminal id instead of blocking. Use \`terminal_read\` to inspect later output, \`terminal_list\` to find running terminals, and \`terminal_kill\` to stop a terminal when needed. Keep \`terminal_read\` bounded with tailLines/maxBytes.\n- Prefer file-editing tools over shell redirection for code changes. Pass \`workdir\` to \`bash\` instead of using \`cd\`.\n- Treat this as a real remote machine: avoid destructive commands unless explicitly needed and approved.\n`
+            : `\n\n## ACTIVE WORKSPACE\nSSH agent mode is not available because no remote workspace is configured in Settings. If the user asks you to run commands, inspect a codebase, edit files, or start an agent, explain that the remote workspace must first be configured in Settings with a host/IP, username, workspace root, and SSH key.\n`;
         // Build personality section
         let personalitySection = '';
         if (this.personality) {
@@ -527,7 +535,7 @@ ${iterationsContext}
 ${this.getLanguageInstruction()}
 
 You are a helpful AI assistant.${toolsAvailable ? ' You have access to tools.' : ' No tools are enabled for this turn, so answer directly without tool calls.'}
-${personalitySection}${memorySection}
+${workspaceSection}${personalitySection}${memorySection}
 
 ## TOOL CALLING
 - Use native function tool calling when you need tools.
@@ -562,7 +570,7 @@ Or inline like: "According to [Source Name](URL), ..."
 
 This is REQUIRED for any factual claims, statistics, news, or information obtained from web searches or browsing.
 
-## SANDBOX ENVIRONMENT
+${workspace?.type === 'ssh_remote' && workspace.ssh?.enabled ? '' : `## SANDBOX ENVIRONMENT
 You have access to a secure sandbox environment where you can:
 - Execute Python code safely using the python_execute tool
 - Read, write, and modify files in the sandbox directory
@@ -581,6 +589,7 @@ In your response, you can reference downloadable files like this:
 - "I've created output.json - you can download it from the Sandbox Files panel"
 - "The converted file data.csv is ready for download"
 - "Check the Sandbox Files panel to download result.txt"
+`}
 ` : ''}
 
 ${this.currentMode === 'compose_reply_mode' ? `
@@ -601,11 +610,11 @@ This is REQUIRED for any factual claims, statistics, news, or information obtain
 
 Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning}`;
     }
-    buildConversationHistory(userMessage, state, conversationHistory = [], forceFinalAnswer = false, toolPreferences, memories = []) {
+    buildConversationHistory(userMessage, state, conversationHistory = [], forceFinalAnswer = false, toolPreferences, memories = [], workspace) {
         const messages = [
             {
                 role: 'system',
-                content: this.getSystemPrompt(forceFinalAnswer, toolPreferences, memories, state.iteration),
+                content: this.getSystemPrompt(forceFinalAnswer, toolPreferences, memories, state.iteration, workspace),
             },
         ];
         // Add conversation history (previous conversations)
@@ -707,7 +716,7 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
         }
         return messages;
     }
-    async run(chatId, userMessage, sandboxId, userId, conversationHistory = [], memories = [], toolPreferences, approvalMode) {
+    async run(chatId, userMessage, sandboxId, userId, conversationHistory = [], memories = [], toolPreferences, approvalMode, workspace) {
         const state = {
             steps: [],
             iteration: 0,
@@ -742,7 +751,7 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
                     this.logDebug(`\n--- ITERATION ${state.iteration} ---`);
                 }
                 // Build conversation history
-                const messages = this.buildConversationHistory(userMessage, state, conversationHistory, forceFinalAnswer, toolPreferences, memories);
+                const messages = this.buildConversationHistory(userMessage, state, conversationHistory, forceFinalAnswer, toolPreferences, memories, workspace);
                 this.logDebug(`Messages count: ${messages.length}`);
                 const shouldEmitFinalAnswer = this.currentMode === 'compose_reply_mode';
                 const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
@@ -835,7 +844,7 @@ Now compose your final answer as normal assistant text.`;
                             // Force one more iteration in compose mode
                             state.iteration++;
                             const messages = this.buildConversationHistory(userMessage, state, conversationHistory, true, // forceFinalAnswer
-                            toolPreferences, memories);
+                            toolPreferences, memories, workspace);
                             const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
                                 this.callbacks.onFinalAnswerToken(token);
                             }, true, (partialContent) => this.callbacks.onPartialFinalAnswer?.(chatId, partialContent));
@@ -944,6 +953,21 @@ Now compose your final answer using all the information above as normal assistan
                     this.resetInvalidTurnState();
                     this.logDebug(`Tool call detected: ${parsedResponse.toolName}`);
                     this.logDebug(`Args: ${JSON.stringify(parsedResponse.toolArgs)}`);
+                    const enabledToolNames = this.getEnabledToolNames(toolPreferences);
+                    if (!enabledToolNames.includes(parsedResponse.toolName)) {
+                        const availableNames = enabledToolNames.length > 0 ? enabledToolNames.join(', ') : 'none';
+                        const disabledToolObservation = `Error: Unknown or disabled tool '${parsedResponse.toolName}'. Available tools: ${availableNames}`;
+                        state.steps.push({
+                            type: 'observation',
+                            content: disabledToolObservation,
+                        });
+                        this.callbacks.onStep({
+                            type: 'observation',
+                            content: disabledToolObservation,
+                        });
+                        this.callbacks.onStepSave?.(chatId, state.steps[state.steps.length - 1], [...state.steps]);
+                        continue;
+                    }
                     // Cast numeric/boolean arguments if model returned them as strings
                     const toolDef = this.toolRegistry.getTool(parsedResponse.toolName);
                     if (toolDef && toolDef.parameters) {
@@ -1012,7 +1036,14 @@ Now compose your final answer using all the information above as normal assistan
                             continue;
                         }
                     }
-                    const observation = await this.toolRegistry.executeTool(parsedResponse.toolName, parsedResponse.toolArgs, { sandboxId, userId, chatId, model: this.model }, this.getEnabledToolNames(toolPreferences));
+                    const observation = await this.toolRegistry.executeTool(parsedResponse.toolName, parsedResponse.toolArgs, {
+                        sandboxId,
+                        userId,
+                        chatId,
+                        model: this.model,
+                        workspace,
+                        createAgentRun: this.callbacks.onCreateAgentRun,
+                    }, this.getEnabledToolNames(toolPreferences));
                     this.logDebug(`\nEXECUTING TOOL: ${parsedResponse.toolName}`);
                     this.logDebug(`Tool observation (${observation.length} chars): ${observation.substring(0, 300)}...`);
                     const obsStep = {
@@ -1022,6 +1053,11 @@ Now compose your final answer using all the information above as normal assistan
                     state.steps.push(obsStep);
                     this.callbacks.onStep(obsStep);
                     this.callbacks.onStepSave?.(chatId, obsStep, [...state.steps]);
+                    if (parsedResponse.toolName === 'create_agent' && observation.startsWith('__agent_run_started__:')) {
+                        state.isComplete = true;
+                        state.finalAnswer = null;
+                        break;
+                    }
                     continue;
                 }
                 if (parsedResponse.type === 'final_answer') {
@@ -1096,7 +1132,7 @@ Now compose your final answer using all the information above as normal assistan
                     // Force one more iteration to get the final answer in compose mode
                     state.iteration++;
                     const forceFinalAnswer = true;
-                    const messages = this.buildConversationHistory(userMessage, state, conversationHistory, forceFinalAnswer, toolPreferences, memories);
+                    const messages = this.buildConversationHistory(userMessage, state, conversationHistory, forceFinalAnswer, toolPreferences, memories, workspace);
                     const shouldEmitFinalAnswer = true; // In compose mode, emit directly
                     const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
                         this.callbacks.onFinalAnswerToken(token);
