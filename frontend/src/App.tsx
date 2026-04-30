@@ -1252,8 +1252,8 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       <main className="flex-1 flex flex-col h-full bg-[#141415] relative overflow-hidden">
         {/* Header */}
         <header className="sticky top-0 z-30 border-b border-white/5 bg-[#141415]/80 px-3 py-2 backdrop-blur-md md:h-14 md:px-4 md:py-0">
-          <div className="flex items-center justify-between gap-2">
-            <div className="relative flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <div className="relative flex min-w-0 flex-1 items-center gap-2">
               <button
                 onClick={() => setShowMobileSidebar(true)}
                 className="rounded-lg p-2 transition-colors hover:bg-surface-100 md:hidden"
@@ -1334,7 +1334,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-1.5 md:gap-2">
+            <div className="flex shrink-0 items-center gap-1 md:gap-2">
               <button
                 onClick={logout}
                 className="rounded-lg p-2 transition-colors hover:bg-surface-100 text-zinc-400 hover:text-red-400"
@@ -1347,11 +1347,11 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
               </button>
               <button
                 onClick={() => setShowModelDropdown(!showModelDropdown)}
-                className="flex items-center gap-1 rounded-lg border border-white/10 px-2.5 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-surface-100 md:hidden"
+                className="flex size-9 items-center justify-center rounded-lg border border-white/10 text-zinc-300 transition-colors hover:bg-surface-100 md:hidden"
                 aria-label="Choose model"
+                title={currentModel || 'Choose model'}
               >
-                <span className="max-w-[6.5rem] truncate">{currentModel || 'No model'}</span>
-                <svg className="size-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="size-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
@@ -1360,18 +1360,28 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   setShowSandbox(!showSandbox);
                   setShowRemoteWorkspace(false);
                 }}
-                className={`rounded-lg border border-white/10 px-2.5 py-2 text-xs font-medium transition-colors md:px-3 md:py-1.5 md:text-sm ${showSandbox ? 'bg-brand text-white' : 'text-zinc-300 hover:bg-surface-100'}`}
+                className={`inline-flex size-9 items-center justify-center rounded-lg border border-white/10 text-xs font-medium transition-colors md:size-auto md:px-3 md:py-1.5 md:text-sm ${showSandbox ? 'bg-brand text-white' : 'text-zinc-300 hover:bg-surface-100'}`}
+                aria-label="Open sandbox"
+                title="Sandbox"
               >
-                Sandbox
+                <svg className="size-4 md:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7.5A2.5 2.5 0 015.5 5h3.25L11 7.25h7.5A2.5 2.5 0 0121 9.75v6.75A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
+                </svg>
+                <span className="hidden md:inline">Sandbox</span>
               </button>
               <button
                 onClick={() => {
                   setShowRemoteWorkspace(!showRemoteWorkspace);
                   setShowSandbox(false);
                 }}
-                className={`rounded-lg border border-white/10 px-2.5 py-2 text-xs font-medium transition-colors md:px-3 md:py-1.5 md:text-sm ${showRemoteWorkspace ? 'bg-brand text-white' : 'text-zinc-300 hover:bg-surface-100'}`}
+                className={`inline-flex size-9 items-center justify-center rounded-lg border border-white/10 text-xs font-medium transition-colors md:size-auto md:px-3 md:py-1.5 md:text-sm ${showRemoteWorkspace ? 'bg-brand text-white' : 'text-zinc-300 hover:bg-surface-100'}`}
+                aria-label="Open remote workspace"
+                title="Remote workspace"
               >
-                Remote
+                <svg className="size-4 md:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3M5 5h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z" />
+                </svg>
+                <span className="hidden md:inline">Remote</span>
               </button>
               <button
                 onClick={() => setShowSettings(true)}
