@@ -7,6 +7,8 @@
 
 A chat-first workspace for running LLMs with tools, approvals, per-chat sandboxes, and SSH-backed coding agents. Built with a ReAct agentic workflow that integrates with llama.cpp-compatible servers.
 
+![Operator Chat interface](docs/screen.png)
+
 ## ✨ Features
 
 - **Chat with LLMs** - Connect to any llama.cpp-compatible server
