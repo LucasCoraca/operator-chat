@@ -49,7 +49,9 @@ export declare class ChatRepository {
     findById(id: string): Promise<Chat | null>;
     findByUserId(userId: string): Promise<ChatSummary[]>;
     create(input: CreateChatInput): Promise<Chat>;
-    update(id: string, updates: Partial<Chat>): Promise<Chat | null>;
+    update(id: string, updates: Partial<Chat>, options?: {
+        touchUpdatedAt?: boolean;
+    }): Promise<Chat | null>;
     delete(id: string): Promise<boolean>;
     deleteByUserId(userId: string): Promise<number>;
     findMessagesByChatId(chatId: string): Promise<ChatMessage[]>;

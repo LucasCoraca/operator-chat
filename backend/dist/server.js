@@ -20,6 +20,7 @@ const mcpClientManager_1 = require("./services/mcpClientManager");
 const tools_1 = require("./tools");
 const ReActAgent_1 = require("./agent/ReActAgent");
 const workspaceRuntime_1 = require("./services/workspaceRuntime");
+const agentMemoryService_1 = require("./services/agentMemoryService");
 const auth_1 = require("./auth");
 const db_1 = require("./db");
 const repositories_1 = require("./repositories");
@@ -97,6 +98,10 @@ const defaultSettings = {
         strictHostKeyChecking: true,
         approvalPolicy: 'ask',
         toolApprovals: {},
+        agentModel: undefined,
+        contextWindowTokens: 128000,
+        reservedOutputTokens: 30000,
+        autoCompactThreshold: 0.82,
     },
 };
 // Settings will be loaded asynchronously
@@ -113,7 +118,7 @@ let llamaClient = new llamaClient_1.LlamaClient(llamaConfig);
 // Initialize MCP Client Manager
 const mcpClientManager = new mcpClientManager_1.MCPClientManager();
 // Initialize Tool Registry with MCP support
-let toolRegistry = new tools_1.ToolRegistry(searxngClient, sandboxManager, memoryManager, mcpClientManager);
+let toolRegistry = new tools_1.ToolRegistry(searxngClient, sandboxManager, memoryManager, mcpClientManager, agentMemoryService_1.agentMemoryService);
 // Set up callback to re-register MCP tools when servers connect/disconnect
 mcpClientManager.setOnToolsChangedCallback(() => {
     toolRegistry.registerMCPTools();
@@ -186,6 +191,9 @@ const AGENT_INTERNAL_TOOL_NAMES = new Set([
     'write',
     'edit',
     'apply_patch',
+    'memory_get',
+    'memory_set',
+    'memory_checkpoint',
 ]);
 function restrictInternalAgentTools(preferences) {
     const next = { ...preferences };
@@ -222,6 +230,10 @@ function normalizeRemoteWorkspaceSettings(input) {
     const privateKey = source.privateKey ? String(source.privateKey).trim() : '';
     const privateKeyPath = source.privateKeyPath ? String(source.privateKeyPath).trim() : undefined;
     const approvalPolicy = source.approvalPolicy === 'auto-approve' ? 'auto-approve' : 'ask';
+    const agentModel = source.agentModel ? String(source.agentModel).trim() : undefined;
+    const contextWindowTokens = Number(source.contextWindowTokens ?? defaultSettings.remoteWorkspace.contextWindowTokens);
+    const reservedOutputTokens = Number(source.reservedOutputTokens ?? defaultSettings.remoteWorkspace.reservedOutputTokens);
+    const autoCompactThreshold = Number(source.autoCompactThreshold ?? defaultSettings.remoteWorkspace.autoCompactThreshold);
     const sourceToolApprovals = source.toolApprovals && typeof source.toolApprovals === 'object'
         ? source.toolApprovals
         : {};
@@ -236,6 +248,10 @@ function normalizeRemoteWorkspaceSettings(input) {
             ...defaultSettings.remoteWorkspace,
             approvalPolicy,
             toolApprovals,
+            agentModel,
+            contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens >= 4096 ? contextWindowTokens : defaultSettings.remoteWorkspace.contextWindowTokens,
+            reservedOutputTokens: Number.isFinite(reservedOutputTokens) && reservedOutputTokens >= 0 ? reservedOutputTokens : defaultSettings.remoteWorkspace.reservedOutputTokens,
+            autoCompactThreshold: Number.isFinite(autoCompactThreshold) && autoCompactThreshold > 0 && autoCompactThreshold <= 1 ? autoCompactThreshold : defaultSettings.remoteWorkspace.autoCompactThreshold,
         };
     }
     if (!host ||
@@ -260,6 +276,10 @@ function normalizeRemoteWorkspaceSettings(input) {
         strictHostKeyChecking: source.strictHostKeyChecking !== false,
         approvalPolicy,
         toolApprovals,
+        agentModel,
+        contextWindowTokens: Number.isFinite(contextWindowTokens) && contextWindowTokens >= 4096 ? contextWindowTokens : defaultSettings.remoteWorkspace.contextWindowTokens,
+        reservedOutputTokens: Number.isFinite(reservedOutputTokens) && reservedOutputTokens >= 0 ? reservedOutputTokens : defaultSettings.remoteWorkspace.reservedOutputTokens,
+        autoCompactThreshold: Number.isFinite(autoCompactThreshold) && autoCompactThreshold > 0 && autoCompactThreshold <= 1 ? autoCompactThreshold : defaultSettings.remoteWorkspace.autoCompactThreshold,
     };
 }
 function getConfiguredWorkspaceConfig() {
@@ -428,6 +448,31 @@ function sanitizeAgentRunsForPersistence(agentRuns) {
         error: truncateForPersistence(typeof run.error === 'string' ? run.error : undefined, MAX_PERSISTED_STEP_CONTENT_CHARS),
     }));
 }
+function normalizePersistedAgentRun(run) {
+    if (run.status !== 'running') {
+        return run;
+    }
+    return {
+        ...run,
+        status: 'failed',
+        error: run.error || 'Agent run was interrupted by a server restart.',
+    };
+}
+function latestIsoDate(values) {
+    let latestTime = Number.NEGATIVE_INFINITY;
+    let latestValue;
+    for (const value of values) {
+        if (!value)
+            continue;
+        const date = value instanceof Date ? value : new Date(value);
+        const time = date.getTime();
+        if (!Number.isFinite(time) || time <= latestTime)
+            continue;
+        latestTime = time;
+        latestValue = date.toISOString();
+    }
+    return latestValue;
+}
 function normalizeChatMessages(messages, agentState, fallbackModel) {
     const normalizedMessages = (messages ?? []).map((message) => {
         if (message.id) {
@@ -492,30 +537,62 @@ async function loadChats() {
                 const { chat: persistedChat, messages } = result;
                 const persistedAgentState = sanitizeAgentStateForPersistence(persistedChat.agent_state);
                 const parsedPersistedAgentState = parseJsonIfNeeded(persistedChat.agent_state);
+                const persistedAgentRuns = sanitizeAgentRunsForPersistence(parsedPersistedAgentState?.agentRuns)
+                    .map(normalizePersistedAgentRun);
+                const sharedAgentContext = parsedPersistedAgentState?.sharedAgentContext &&
+                    typeof parsedPersistedAgentState.sharedAgentContext === 'object' &&
+                    typeof parsedPersistedAgentState.sharedAgentContext.summary === 'string'
+                    ? parsedPersistedAgentState.sharedAgentContext
+                    : undefined;
+                const latestActivityAt = latestIsoDate([
+                    ...messages.map((message) => message.created_at),
+                    ...persistedAgentRuns.map((run) => run.updatedAt),
+                    persistedChat.updated_at,
+                ]);
+                const restoredMessages = messages.map((msg, idx) => ({
+                    id: msg.id,
+                    role: msg.role,
+                    content: msg.content,
+                    model: msg.model || undefined,
+                    agentSteps: sanitizeAgentStepsForPersistence(msg.agent_steps),
+                    agentRunId: msg.content.startsWith('__operator_agent_run__:') ? msg.content.slice('__operator_agent_run__:'.length).trim() : undefined,
+                }));
+                let restoredMessagesChanged = false;
+                const restoredAgentMessageIds = new Set(restoredMessages
+                    .map((message) => message.agentRunId || (message.content.startsWith('__operator_agent_run__:') ? message.content.slice('__operator_agent_run__:'.length).trim() : undefined))
+                    .filter(Boolean));
+                for (const run of persistedAgentRuns) {
+                    if (restoredAgentMessageIds.has(run.id)) {
+                        continue;
+                    }
+                    restoredMessages.push({
+                        id: crypto_1.default.randomUUID(),
+                        role: 'assistant',
+                        content: `__operator_agent_run__:${run.id}`,
+                        model: run.model,
+                        agentSteps: [],
+                        agentRunId: run.id,
+                    });
+                    restoredMessagesChanged = true;
+                }
                 const session = {
                     id: persistedChat.id,
                     userId: persistedChat.user_id,
                     sandboxId: persistedChat.sandbox_id,
-                    messages: messages.map((msg, idx) => ({
-                        id: msg.id,
-                        role: msg.role,
-                        content: msg.content,
-                        model: msg.model || undefined,
-                        agentSteps: sanitizeAgentStepsForPersistence(msg.agent_steps),
-                        agentRunId: msg.content.startsWith('__operator_agent_run__:') ? msg.content.slice('__operator_agent_run__:'.length).trim() : undefined,
-                    })),
+                    messages: restoredMessages,
                     name: persistedChat.name,
                     createdAt: persistedChat.created_at.toISOString(),
-                    updatedAt: persistedChat.updated_at.toISOString(),
+                    updatedAt: latestActivityAt || persistedChat.updated_at.toISOString(),
                     agentState: persistedAgentState,
                     toolPreferences: persistedChat.tool_preferences || {},
                     approvalMode: persistedChat.approval_mode || { alwaysApprove: false },
-                    agentRuns: sanitizeAgentRunsForPersistence(parsedPersistedAgentState?.agentRuns),
+                    agentRuns: persistedAgentRuns,
+                    sharedAgentContext,
                 };
                 const sessionChanged = normalizeChatSession(session);
                 chatSessions.set(persistedChat.id, session);
-                if (sessionChanged) {
-                    await saveChat(session);
+                if (sessionChanged || restoredMessagesChanged) {
+                    await saveChat(session, { touchUpdatedAt: false });
                 }
             }
         }
@@ -525,7 +602,7 @@ async function loadChats() {
     }
 }
 // Save chat to database
-async function saveChat(session) {
+async function saveChat(session, options = {}) {
     try {
         // Update or create chat
         const existingChat = await repositories_1.chatRepository.findById(session.id);
@@ -535,10 +612,11 @@ async function saveChat(session) {
                 agent_state: {
                     ...sanitizeAgentStateForPersistence(session.agentState),
                     agentRuns: sanitizeAgentRunsForPersistence(session.agentRuns),
+                    sharedAgentContext: session.sharedAgentContext,
                 },
                 tool_preferences: session.toolPreferences,
                 approval_mode: session.approvalMode,
-            });
+            }, { touchUpdatedAt: options.touchUpdatedAt });
         }
         else {
             await repositories_1.chatRepository.create({
@@ -553,8 +631,9 @@ async function saveChat(session) {
                 agent_state: {
                     ...sanitizeAgentStateForPersistence(session.agentState),
                     agentRuns: sanitizeAgentRunsForPersistence(session.agentRuns),
+                    sharedAgentContext: session.sharedAgentContext,
                 },
-            });
+            }, { touchUpdatedAt: options.touchUpdatedAt });
         }
         // Sync messages
         const existingMessages = await repositories_1.chatRepository.findMessagesByChatId(session.id);
@@ -719,6 +798,110 @@ function emitChatUpdated(session) {
         updatedAt: session.updatedAt,
     });
 }
+function getAgentRunIdFromMessage(message) {
+    if (message.agentRunId) {
+        return message.agentRunId;
+    }
+    if (message.content.startsWith('__operator_agent_run__:')) {
+        return message.content.slice('__operator_agent_run__:'.length).trim();
+    }
+    return undefined;
+}
+function getAgentFinalAnswer(run) {
+    if (run.finalAnswer?.trim()) {
+        return run.finalAnswer.trim();
+    }
+    for (let index = run.steps.length - 1; index >= 0; index--) {
+        const step = run.steps[index];
+        if (step.type === 'final_answer' && step.content.trim()) {
+            return step.content.trim();
+        }
+    }
+    return null;
+}
+function formatAgentRunForChatHistory(run) {
+    const filesTouched = new Map();
+    const commands = [];
+    for (const step of run.steps) {
+        if (step.type !== 'action' || !step.actionName) {
+            continue;
+        }
+        if (['write', 'edit', 'apply_patch'].includes(step.actionName)) {
+            const pathValue = String(step.actionArgs?.path || step.actionArgs?.filePath || step.actionArgs?.patchPath || '').trim();
+            if (pathValue) {
+                filesTouched.set(pathValue, step.actionName);
+            }
+            else if (step.actionName === 'apply_patch') {
+                filesTouched.set('(patch applied)', step.actionName);
+            }
+        }
+        if (step.actionName === 'bash') {
+            const command = String(step.actionArgs?.command || '').trim();
+            if (command) {
+                commands.push(command);
+            }
+        }
+    }
+    const sections = [
+        `Agent run: ${run.title}`,
+        `Status: ${run.status}`,
+        `Workspace: ${run.workspaceRoot}`,
+    ];
+    if (run.error) {
+        sections.push(`Error: ${truncateForAgentContext(run.error, 1200)}`);
+    }
+    const finalAnswer = getAgentFinalAnswer(run);
+    if (finalAnswer) {
+        sections.push(`Final answer:\n${truncateForAgentContext(finalAnswer, 5000)}`);
+    }
+    if (filesTouched.size > 0) {
+        sections.push(`Files touched:\n${Array.from(filesTouched.entries()).slice(-25).map(([filePath, action]) => `- ${filePath} (${action})`).join('\n')}`);
+    }
+    if (commands.length > 0) {
+        sections.push(`Recent commands:\n${commands.slice(-12).map((command) => `- ${truncateForAgentContext(command, 500)}`).join('\n')}`);
+    }
+    return sections.join('\n\n');
+}
+function buildChatConversationHistory(session, excludeLastMessage = false) {
+    const runById = new Map(session.agentRuns.map((run) => [run.id, run]));
+    const messages = excludeLastMessage ? session.messages.slice(0, -1) : session.messages;
+    return messages.map((message) => {
+        const agentRunId = getAgentRunIdFromMessage(message);
+        const run = agentRunId ? runById.get(agentRunId) : undefined;
+        if (message.role === 'assistant' && run) {
+            return {
+                role: 'assistant',
+                content: formatAgentRunForChatHistory(run),
+            };
+        }
+        return {
+            role: message.role,
+            content: message.content,
+        };
+    });
+}
+function ensureCodingAgentSuccessContract(prompt) {
+    const hasSuccessCriteria = /(^|\n)\s*#{0,3}\s*success criteria\s*:?\s*(\n|$)/i.test(prompt);
+    const hasNonGoals = /(^|\n)\s*#{0,3}\s*non-?goals\s*:?\s*(\n|$)/i.test(prompt);
+    const hasRequiredVerification = /(^|\n)\s*#{0,3}\s*required verification\s*:?\s*(\n|$)/i.test(prompt);
+    if (hasSuccessCriteria && hasNonGoals && hasRequiredVerification) {
+        return prompt;
+    }
+    return `${prompt.trim()}
+
+Success Criteria:
+- Complete the user's requested coding task in the configured remote workspace.
+- The original issue or requested behavior is fixed from the user's perspective.
+- Any changed code is saved in the remote workspace.
+
+Non-goals:
+- Do not expand into unrelated cleanup, optimization, or speculative debugging.
+- Do not continue investigating anomalies that do not affect the requested outcome.
+
+Required Verification:
+- Run bounded, practical checks appropriate for the task, such as a build, test, targeted command, file inspection, or browser/runtime check.
+- Once the success criteria are met and required verification passes, stop tool use and provide the final answer.`;
+}
 async function executeScheduledTask(task, force = false) {
     if (!force && task.status !== 'active')
         return;
@@ -756,9 +939,7 @@ async function executeScheduledTask(task, force = false) {
     session.updatedAt = new Date().toISOString();
     io.to(session.id).emit('message', { role: 'user', content: scheduledMessage });
     emitChatUpdated(session);
-    const conversationHistory = session.messages
-        .filter((msg, idx) => idx < session.messages.length - 1)
-        .map((msg) => ({ role: msg.role, content: msg.content }));
+    const conversationHistory = buildChatConversationHistory(session, true);
     const selectedPersonality = await getSelectedPersonality();
     let approvalBlocked = false;
     const agent = new ReActAgent_1.ReActAgent(llamaClient, toolRegistry, maxIterations, {
@@ -860,6 +1041,189 @@ async function executeScheduledTask(task, force = false) {
 let schedulerTimer = null;
 let schedulerRunning = false;
 const runningScheduledTaskIds = new Set();
+const runningAgentRuns = new Map();
+function truncateForAgentContext(content, maxChars) {
+    if (content.length <= maxChars) {
+        return content;
+    }
+    return `${content.slice(0, maxChars)}\n[truncated]`;
+}
+function summarizeStepForContext(step) {
+    if (step.type === 'action') {
+        const args = step.actionArgs ? JSON.stringify(step.actionArgs) : '';
+        return `ACTION ${step.actionName || step.content}${args ? ` ${truncateForAgentContext(args, 1200)}` : ''}`;
+    }
+    if (step.type === 'observation') {
+        return `OBSERVATION ${truncateForAgentContext(step.content, 2500)}`;
+    }
+    if (step.type === 'final_answer') {
+        return `FINAL ${truncateForAgentContext(step.content, 2000)}`;
+    }
+    if (step.type === 'mode_transition') {
+        return `MODE ${truncateForAgentContext(step.content, 500)}`;
+    }
+    return `${step.type.toUpperCase()} ${truncateForAgentContext(step.content, 1200)}`;
+}
+function getLatestReadActionIndexes(steps) {
+    const latestByPath = new Map();
+    for (let index = 0; index < steps.length; index++) {
+        const step = steps[index];
+        if (step.type !== 'action' || step.actionName !== 'read') {
+            continue;
+        }
+        const filePath = String(step.actionArgs?.path || '').trim();
+        if (filePath) {
+            latestByPath.set(filePath, index);
+        }
+    }
+    return new Set(latestByPath.values());
+}
+function summarizeStepsForSharedContext(steps) {
+    const latestReadIndexes = getLatestReadActionIndexes(steps);
+    return steps.map((step, index) => {
+        if (step.type === 'observation') {
+            const previousStep = steps[index - 1];
+            if (previousStep?.type === 'action' && previousStep.actionName === 'read') {
+                const filePath = String(previousStep.actionArgs?.path || '').trim();
+                if (filePath && !latestReadIndexes.has(index - 1)) {
+                    return `OBSERVATION [Earlier read of ${filePath} omitted; later read of the same path is preserved.]`;
+                }
+            }
+        }
+        return summarizeStepForContext(step);
+    });
+}
+function buildAgentLedger(session, activeRunId) {
+    const runs = session.agentRuns.slice(-8);
+    const lines = [];
+    const files = new Map();
+    const reads = new Map();
+    const commands = [];
+    const activeTerminals = [];
+    for (const run of runs) {
+        lines.push(`- ${run.id === activeRunId ? '[current] ' : ''}${run.title} (${run.status}) workspace=${run.workspaceRoot} model=${run.model || 'default'}`);
+        for (const step of run.steps) {
+            if (step.type === 'action' && step.actionName) {
+                if (['write', 'edit', 'apply_patch'].includes(step.actionName)) {
+                    const filePath = String(step.actionArgs?.path || step.actionArgs?.filePath || '');
+                    if (filePath)
+                        files.set(filePath, `${step.actionName} in ${run.title}`);
+                }
+                if (step.actionName === 'read') {
+                    const filePath = String(step.actionArgs?.path || '');
+                    if (filePath)
+                        reads.set(filePath, `read in ${run.title}`);
+                }
+                if (step.actionName === 'bash') {
+                    const command = String(step.actionArgs?.command || '');
+                    if (command)
+                        commands.push(`${run.title}: ${truncateForAgentContext(command, 300)}`);
+                }
+            }
+            if (step.type === 'observation' && step.content.includes('terminalId=')) {
+                const terminalId = step.content.match(/terminalId=([A-Za-z0-9-]+)/)?.[1];
+                if (terminalId)
+                    activeTerminals.push(`${terminalId} from ${run.title}`);
+            }
+        }
+    }
+    const sections = [
+        `## Shared Chat Agent Ledger\n${lines.join('\n') || 'No previous agent runs.'}`,
+    ];
+    if (files.size > 0) {
+        sections.push(`## Files Touched\n${Array.from(files.entries()).slice(-30).map(([filePath, source]) => `- ${filePath}: ${source}`).join('\n')}`);
+    }
+    if (reads.size > 0) {
+        sections.push(`## Files Read\n${Array.from(reads.entries()).slice(-40).map(([filePath, source]) => `- ${filePath}: ${source}`).join('\n')}`);
+    }
+    if (commands.length > 0) {
+        sections.push(`## Recent Commands\n${commands.slice(-20).map((command) => `- ${command}`).join('\n')}`);
+    }
+    if (activeTerminals.length > 0) {
+        sections.push(`## Known Background Terminals\n${activeTerminals.slice(-10).map((terminal) => `- ${terminal}`).join('\n')}`);
+    }
+    return sections.join('\n\n');
+}
+function buildSharedAgentContext(session, activeRunId) {
+    const sections = [];
+    if (session.sharedAgentContext?.summary) {
+        sections.push(`## Previous Compacted Agent Context\n${session.sharedAgentContext.summary}`);
+    }
+    sections.push(buildAgentLedger(session, activeRunId));
+    const recentRuns = session.agentRuns.slice(-4);
+    const recentTrace = recentRuns.map((run) => {
+        const steps = summarizeStepsForSharedContext(run.steps).slice(-10).map((step) => `  - ${step.replace(/\n/g, '\n    ')}`).join('\n');
+        return `### ${run.id === activeRunId ? 'Current' : 'Recent'} Run: ${run.title}\nStatus: ${run.status}\nWorkspace: ${run.workspaceRoot}\n${steps || '  - No steps yet.'}`;
+    }).join('\n\n');
+    if (recentTrace) {
+        sections.push(`## Recent Agent Trace\n${recentTrace}`);
+    }
+    return sections.join('\n\n');
+}
+async function buildSharedAgentContextWithMemory(session, workspace, activeRunId) {
+    const sections = [];
+    const memoryPacket = await agentMemoryService_1.agentMemoryService.buildContextPacket({
+        chatId: session.id,
+        workspace,
+        agentRunId: activeRunId,
+    });
+    if (memoryPacket.trim()) {
+        sections.push(`## Backend Managed Memory\n${memoryPacket}`);
+    }
+    sections.push(buildSharedAgentContext(session, activeRunId));
+    return sections.join('\n\n');
+}
+async function compactSharedAgentContext(session, run, stateSteps, model, tokenEstimate) {
+    const allRunsText = session.agentRuns.map((agentRun) => {
+        const steps = summarizeStepsForSharedContext(agentRun.id === run.id ? stateSteps : agentRun.steps)
+            .map((step) => `- ${step.replace(/\n/g, '\n  ')}`)
+            .join('\n');
+        return `## Agent Run: ${agentRun.title}
+id=${agentRun.id}
+status=${agentRun.status}
+workspace=${agentRun.workspaceRoot}
+model=${agentRun.model || model}
+${steps}`;
+    }).join('\n\n');
+    const previousSummary = session.sharedAgentContext?.summary
+        ? `\n\nPrevious compacted context:\n${session.sharedAgentContext.summary}`
+        : '';
+    const response = await llamaClient.chat([
+        {
+            role: 'system',
+            content: `You compact coding-agent history for continuation. Preserve facts, user constraints, decisions, files touched, commands/results, active terminals, unresolved errors, and next steps. Be concise and structured. Do not invent details.`,
+        },
+        {
+            role: 'user',
+            content: `${previousSummary}
+
+Current shared agent history:
+${truncateForAgentContext(allRunsText, 80000)}
+
+Return only the compacted context markdown with these headings:
+## Goal And Constraints
+## Current State
+## Files And Changes
+## Commands And Results
+## Active Terminals
+## Open Issues
+## Next Steps`,
+        },
+    ], { model });
+    const summary = response.content.trim();
+    if (!summary) {
+        return buildSharedAgentContext(session, run.id);
+    }
+    session.sharedAgentContext = {
+        summary,
+        coversRunIds: session.agentRuns.map((agentRun) => agentRun.id),
+        coversStepCount: session.agentRuns.reduce((count, agentRun) => count + agentRun.steps.length, 0),
+        updatedAt: new Date().toISOString(),
+        tokenEstimate,
+    };
+    await saveChat(session);
+    return buildSharedAgentContext(session, run.id);
+}
 async function pollScheduledTasks() {
     if (schedulerRunning)
         return;
@@ -890,27 +1254,29 @@ async function startChatAgentRun(session, userId, request, model, language, sour
     if (!workspace?.ssh?.enabled) {
         throw new Error('Remote workspace is not configured in Settings.');
     }
+    const agentModel = loadedSettings.remoteWorkspace.agentModel || model;
+    const agentPrompt = ensureCodingAgentSuccessContract(request.prompt);
     const now = new Date().toISOString();
     const run = {
         id: crypto_1.default.randomUUID(),
         chatId: session.id,
         userId,
         title: request.title,
-        prompt: request.prompt,
+        prompt: agentPrompt,
         workspaceRoot: request.workspaceRoot,
         status: 'running',
         steps: [],
         finalAnswer: null,
         createdAt: now,
         updatedAt: now,
-        model,
+        model: agentModel,
     };
     session.agentRuns.push(run);
     session.messages.push({
         id: crypto_1.default.randomUUID(),
         role: 'assistant',
         content: `__operator_agent_run__:${run.id}`,
-        model,
+        model: agentModel,
         agentSteps: [],
         agentRunId: run.id,
     });
@@ -919,7 +1285,7 @@ async function startChatAgentRun(session, userId, request, model, language, sour
     io.to(sourceSocketChatId).emit('message', {
         role: 'assistant',
         content: `__operator_agent_run__:${run.id}`,
-        model,
+        model: agentModel,
         agentRunId: run.id,
     });
     io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
@@ -956,25 +1322,50 @@ async function startChatAgentRun(session, userId, request, model, language, sour
         onStepSave: async () => {
             await saveChat(session);
         },
-    }, null, language, model);
+        onSharedContextRequest: async () => buildSharedAgentContextWithMemory(session, workspace, run.id),
+        onContextPressure: async (pressure) => {
+            const context = await compactSharedAgentContext(session, run, pressure.state.steps, agentModel, pressure.tokenEstimate);
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            const memoryPacket = await agentMemoryService_1.agentMemoryService.buildContextPacket({
+                chatId: session.id,
+                workspace,
+                agentRunId: run.id,
+            });
+            return memoryPacket.trim() ? `## Backend Managed Memory\n${memoryPacket}\n\n${context}` : context;
+        },
+    }, null, language, agentModel, {
+        disableMaxIterations: true,
+        runId: run.id,
+        contextWindowTokens: loadedSettings.remoteWorkspace.contextWindowTokens,
+        reservedOutputTokens: loadedSettings.remoteWorkspace.reservedOutputTokens,
+        autoCompactThreshold: loadedSettings.remoteWorkspace.autoCompactThreshold,
+    });
+    runningAgentRuns.set(run.id, { agent, session, run, sourceSocketChatId });
     void (async () => {
         try {
-            const result = await agent.run(session.id, request.prompt, session.sandboxId, userId, [], (await memoryManager.getMemories(userId)).map((memory) => memory.content), agentToolPreferences, { alwaysApprove: false }, workspace);
+            const result = await agent.run(session.id, agentPrompt, session.sandboxId, userId, [], (await memoryManager.getMemories(userId)).map((memory) => memory.content), agentToolPreferences, { alwaysApprove: false }, workspace);
             run.steps = result.steps;
             run.finalAnswer = result.finalAnswer;
-            run.status = result.isComplete ? 'completed' : 'failed';
+            run.status = run.status === 'cancelled'
+                ? 'cancelled'
+                : result.isComplete
+                    ? 'completed'
+                    : 'failed';
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
             await flushScheduledChatSave(session);
         }
         catch (error) {
-            run.status = 'failed';
-            run.error = error instanceof Error ? error.message : String(error);
+            if (run.status !== 'cancelled') {
+                run.status = 'failed';
+                run.error = error instanceof Error ? error.message : String(error);
+            }
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
             await flushScheduledChatSave(session);
         }
         finally {
+            runningAgentRuns.delete(run.id);
             clearPendingApprovalsForChat(sourceSocketChatId);
         }
     })();
@@ -1601,13 +1992,10 @@ io.on('connection', (socket) => {
             content: message,
         });
         socket.emit('message', { role: 'user', content: message });
-        // Build conversation history (excluding thoughts) - user/assistant pairs
-        const conversationHistory = session.messages
-            .filter((msg, idx) => idx < session.messages.length - 1) // Exclude current message
-            .map((msg) => ({
-            role: msg.role,
-            content: msg.content,
-        }));
+        // Build conversation history (excluding thoughts) - user/assistant pairs.
+        // Completed agent-run placeholder messages are expanded into compact summaries
+        // so the regular chat model can understand what the agent did.
+        const conversationHistory = buildChatConversationHistory(session, true);
         // Get the selected personality from database
         const selectedPersonalityId = loadedSettings.ui.selectedPersonality;
         let selectedPersonality = null;
@@ -1836,16 +2224,64 @@ io.on('connection', (socket) => {
             return;
         }
         const session = chatSessions.get(chatId);
-        if (session && session.userId === currentUserId && session.currentAgent) {
-            console.log(`Stopping agent for chat ${chatId}`);
-            session.currentAgent.cancel();
-            session.currentAgent = undefined;
+        if (session && session.userId === currentUserId) {
+            let stopped = false;
+            if (session.currentAgent) {
+                console.log(`Stopping chat agent for chat ${chatId}`);
+                session.currentAgent.cancel();
+                session.currentAgent = undefined;
+                stopped = true;
+            }
+            for (const [runId, running] of runningAgentRuns.entries()) {
+                if (running.session.id !== chatId || running.session.userId !== currentUserId) {
+                    continue;
+                }
+                console.log(`Stopping spawned agent run ${runId} for chat ${chatId}`);
+                running.agent.cancel();
+                running.run.status = 'cancelled';
+                running.run.error = 'Stopped by user.';
+                running.run.updatedAt = new Date().toISOString();
+                io.to(running.sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(running.run));
+                scheduleChatSave(running.session, 0);
+                stopped = true;
+            }
             clearPendingApprovalsForChat(chatId);
-            io.to(chatId).emit('agent-cancelled');
+            if (stopped) {
+                io.to(chatId).emit('agent-cancelled');
+            }
+            else {
+                console.log(`No active agent found for chat ${chatId}`);
+            }
         }
         else {
             console.log(`No active agent found for chat ${chatId} or unauthorized`);
         }
+    });
+    socket.on('agent-user-message', (data) => {
+        if (!currentUserId) {
+            socket.emit('error', { message: 'Not authenticated' });
+            return;
+        }
+        const chatId = String(data?.chatId || '').trim();
+        const runId = String(data?.runId || '').trim();
+        const message = String(data?.message || '').trim();
+        if (!chatId || !runId || !message) {
+            socket.emit('error', { message: 'chatId, runId, and message are required' });
+            return;
+        }
+        const running = runningAgentRuns.get(runId);
+        if (!running || running.session.id !== chatId || running.session.userId !== currentUserId) {
+            socket.emit('error', { message: 'Running agent not found' });
+            return;
+        }
+        const accepted = running.agent.addUserMessage(message);
+        if (!accepted) {
+            socket.emit('error', { message: 'Agent message was empty' });
+            return;
+        }
+        running.run.updatedAt = new Date().toISOString();
+        io.to(running.sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(running.run));
+        scheduleChatSave(running.session, 0);
     });
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);

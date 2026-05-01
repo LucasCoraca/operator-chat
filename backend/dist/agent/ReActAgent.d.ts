@@ -3,7 +3,7 @@ import { ToolRegistry, ChatToolPreference, ToolExecutionPolicy } from '../tools'
 import { WorkspaceConfig } from '../services/workspaceRuntime';
 export type AgentMode = 'research_mode' | 'compose_reply_mode';
 export interface AgentStep {
-    type: 'action' | 'observation' | 'final_answer' | 'mode_transition';
+    type: 'action' | 'observation' | 'tool_progress' | 'final_answer' | 'mode_transition';
     content: string;
     actionName?: string;
     actionArgs?: Record<string, any>;
@@ -34,6 +34,13 @@ export interface CreateAgentRunRequest {
     prompt: string;
     workspaceRoot: string;
 }
+export interface ReActAgentOptions {
+    disableMaxIterations?: boolean;
+    runId?: string;
+    contextWindowTokens?: number;
+    reservedOutputTokens?: number;
+    autoCompactThreshold?: number;
+}
 export interface ChatPersonality {
     id: string;
     name: string;
@@ -55,6 +62,19 @@ export interface AgentCallbacks {
     onCreateAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
     onStepSave?: (chatId: string, step: AgentStep, allSteps: AgentStep[]) => void;
     onPartialFinalAnswer?: (chatId: string, partialContent: string) => void;
+    onSharedContextRequest?: (request: AgentContextRequest) => Promise<string | undefined>;
+    onContextPressure?: (request: AgentContextPressureRequest) => Promise<string | undefined>;
+}
+export interface AgentContextRequest {
+    chatId: string;
+    runId?: string;
+    state: AgentState;
+    tokenEstimate?: number;
+}
+export interface AgentContextPressureRequest extends AgentContextRequest {
+    tokenEstimate: number;
+    thresholdTokens: number;
+    maxPromptTokens: number;
 }
 export declare class ReActAgent {
     private llamaClient;
@@ -70,7 +90,12 @@ export declare class ReActAgent {
     private currentMode;
     private language;
     private model;
-    constructor(llamaClient: LlamaClient, toolRegistry: ToolRegistry, maxIterations?: number, callbacks?: Partial<AgentCallbacks>, personality?: ChatPersonality | null, language?: string, model?: string);
+    private options;
+    private activeState;
+    private activeChatId;
+    private pendingUserMessages;
+    constructor(llamaClient: LlamaClient, toolRegistry: ToolRegistry, maxIterations?: number, callbacks?: Partial<AgentCallbacks>, personality?: ChatPersonality | null, language?: string, model?: string, options?: ReActAgentOptions);
+    addUserMessage(message: string): boolean;
     private setMode;
     cancel(): void;
     isAgentRunning(): boolean;
@@ -83,7 +108,11 @@ export declare class ReActAgent {
     private recordInvalidTurn;
     private resetInvalidTurnState;
     private truncateForPrompt;
+    private compactObservationForPrompt;
+    private compactDuplicateReadStepsForPrompt;
+    private getStepsForPrompt;
     private isSyntheticSummaryObservation;
+    private drainPendingUserMessages;
     private getComposableObservations;
     private replaceLatestCorrection;
     private buildCorrectionMessage;
@@ -92,9 +121,18 @@ export declare class ReActAgent {
     private getToolDefinitions;
     private isToolAutoApproved;
     private shouldBypassApproval;
+    private getToolActionIndexes;
+    private getLastObservationAfter;
+    private normalizeAgentPath;
+    private getReadKey;
+    private didFileChangeAfterRead;
+    private getDuplicateReadObservation;
+    private validateComposeReadiness;
     private getLanguageInstruction;
     private getSystemPrompt;
     private buildConversationHistory;
+    private getContextBudget;
+    private buildManagedConversationHistory;
     run(chatId: string, userMessage: string, sandboxId: string, userId: string, conversationHistory?: Array<{
         role: 'user' | 'assistant';
         content: string;

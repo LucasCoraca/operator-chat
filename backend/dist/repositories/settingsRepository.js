@@ -92,6 +92,10 @@ class SettingsRepository {
             strictHostKeyChecking: true,
             approvalPolicy: 'ask',
             toolApprovals: {},
+            agentModel: undefined,
+            contextWindowTokens: 128000,
+            reservedOutputTokens: 30000,
+            autoCompactThreshold: 0.82,
         };
     }
     async setRemoteWorkspace(config) {

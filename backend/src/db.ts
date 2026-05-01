@@ -174,6 +174,49 @@ export async function initializeDatabase(): Promise<void> {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS agent_memories (
+        id VARCHAR(36) PRIMARY KEY,
+        chat_id VARCHAR(36) NOT NULL,
+        workspace_host VARCHAR(255) NOT NULL,
+        workspace_root VARCHAR(1024) NOT NULL,
+        agent_run_id VARCHAR(36),
+        kind VARCHAR(64) NOT NULL,
+        memory_key VARCHAR(1024) NOT NULL,
+        content MEDIUMTEXT NOT NULL,
+        source ENUM('system', 'agent') NOT NULL DEFAULT 'system',
+        confidence ENUM('observed', 'inferred', 'agent_claim') NOT NULL DEFAULT 'observed',
+        metadata JSON,
+        expires_at TIMESTAMP NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        UNIQUE KEY uniq_agent_memory_scope (chat_id, workspace_host(128), workspace_root(128), kind, memory_key(128)),
+        INDEX idx_agent_memory_chat_workspace (chat_id, workspace_host(128), workspace_root(128), kind),
+        INDEX idx_agent_memory_run (agent_run_id),
+        FULLTEXT KEY ft_agent_memory_content (content),
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
+    await pool.execute(`
+      CREATE TABLE IF NOT EXISTS agent_memory_events (
+        id VARCHAR(36) PRIMARY KEY,
+        memory_id VARCHAR(36),
+        chat_id VARCHAR(36) NOT NULL,
+        agent_run_id VARCHAR(36),
+        source_step_id VARCHAR(36),
+        event_type VARCHAR(64) NOT NULL,
+        before_json JSON,
+        after_json JSON,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_agent_memory_events_chat (chat_id, created_at),
+        INDEX idx_agent_memory_events_memory (memory_id),
+        INDEX idx_agent_memory_events_run (agent_run_id),
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
+        FOREIGN KEY (memory_id) REFERENCES agent_memories(id) ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+
     console.log('Database schema initialized successfully');
   } catch (error) {
     console.error('Error initializing database schema:', error);

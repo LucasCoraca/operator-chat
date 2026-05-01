@@ -3,6 +3,7 @@ import { SandboxManager } from '../services/sandboxManager';
 import { MemoryManager } from '../services/memoryManager';
 import { MCPClientManager } from '../services/mcpClientManager';
 import { WorkspaceConfig } from '../services/workspaceRuntime';
+import { AgentMemoryService } from '../services/agentMemoryService';
 import type { CreateAgentRunRequest } from '../agent/ReActAgent';
 export type ToolCapability = 'filesystem' | 'network' | 'process' | 'remote' | 'browser' | 'read_chat' | 'write_chat' | 'memory' | 'schedule';
 export type ToolSandboxPolicy = 'none' | 'chat_fs_only' | 'isolated_process' | 'workspace_runtime' | 'ssh_remote' | 'browser_isolated';
@@ -32,9 +33,12 @@ export interface Tool {
         sandboxId: string;
         userId: string;
         chatId?: string;
+        agentRunId?: string;
         model?: string;
         workspace?: WorkspaceConfig;
         createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
+        emitToolProgress?: (content: string) => void;
+        agentMemory?: AgentMemoryService;
     }) => Promise<string>;
 }
 export declare class ToolRegistry {
@@ -43,8 +47,9 @@ export declare class ToolRegistry {
     private sandboxManager;
     private workspaceRuntimeFactory;
     private memoryManager;
+    readonly agentMemoryService?: AgentMemoryService;
     private mcpClientManager?;
-    constructor(searxngClient: SearXNGClient, sandboxManager: SandboxManager, memoryManager: MemoryManager, mcpClientManager?: MCPClientManager);
+    constructor(searxngClient: SearXNGClient, sandboxManager: SandboxManager, memoryManager: MemoryManager, mcpClientManager?: MCPClientManager, agentMemoryService?: AgentMemoryService);
     private registerBuiltInTools;
     registerMCPTools(): void;
     getTools(): Tool[];
@@ -58,9 +63,12 @@ export declare class ToolRegistry {
         sandboxId: string;
         userId: string;
         chatId?: string;
+        agentRunId?: string;
         model?: string;
         workspace?: WorkspaceConfig;
         createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
+        emitToolProgress?: (content: string) => void;
+        agentMemory?: AgentMemoryService;
     }, enabledToolNames?: string[]): Promise<string>;
     getToolDescriptions(enabledToolNames?: string[]): string;
     getToolDefinitions(): Array<{

@@ -42,6 +42,10 @@ interface Settings {
     strictHostKeyChecking: boolean;
     approvalPolicy: 'ask' | 'auto-approve';
     toolApprovals: Record<string, 'ask' | 'auto-approve'>;
+    agentModel?: string;
+    contextWindowTokens: number;
+    reservedOutputTokens: number;
+    autoCompactThreshold: number;
   };
 }
 
@@ -211,6 +215,10 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       strictHostKeyChecking: true,
       approvalPolicy: 'ask',
       toolApprovals: {},
+      agentModel: undefined,
+      contextWindowTokens: 128000,
+      reservedOutputTokens: 30000,
+      autoCompactThreshold: 0.82,
     },
   });
   const [chats, setChats] = useState<Chat[]>([]);
@@ -342,6 +350,10 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             strictHostKeyChecking: true,
             approvalPolicy: 'ask',
             toolApprovals: {},
+            agentModel: undefined,
+            contextWindowTokens: 128000,
+            reservedOutputTokens: 30000,
+            autoCompactThreshold: 0.82,
             ...data.remoteWorkspace,
           },
         });
@@ -987,6 +999,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             });
           })()}
           tools={landingTools}
+          models={models}
           onManagePersonalities={handleManagePersonalities}
           isPersonalityManagerOpen={showPersonalityManager}
         />

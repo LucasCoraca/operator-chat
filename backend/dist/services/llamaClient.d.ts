@@ -66,6 +66,9 @@ export declare class LlamaClient {
     private config;
     constructor(config: LlamaConfig);
     updateConfig(config: Partial<LlamaConfig>): void;
+    private getNativeBaseUrl;
+    countTokens(content: string): Promise<number>;
+    countChatTokens(messages: ChatMessage[]): Promise<number>;
     chat(messages: ChatMessage[], options?: {
         temperature?: number;
         maxTokens?: number;

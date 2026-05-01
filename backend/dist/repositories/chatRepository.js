@@ -44,7 +44,7 @@ class ChatRepository {
             throw new Error('Failed to create chat');
         return chat;
     }
-    async update(id, updates) {
+    async update(id, updates, options = {}) {
         const fields = [];
         const values = [];
         if (updates.name !== undefined) {
@@ -65,8 +65,10 @@ class ChatRepository {
         }
         if (fields.length === 0)
             return this.findById(id);
-        fields.push('updated_at = ?');
-        values.push(toMysqlDateTime());
+        if (options.touchUpdatedAt !== false) {
+            fields.push('updated_at = ?');
+            values.push(toMysqlDateTime());
+        }
         values.push(id);
         await (0, db_1.execute)(`UPDATE chats SET ${fields.join(', ')} WHERE id = ?`, values);
         return this.findById(id);

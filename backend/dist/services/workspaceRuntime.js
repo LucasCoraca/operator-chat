@@ -186,6 +186,8 @@ class LocalWorkspaceRuntime extends BaseWorkspaceRuntime {
         return runProcess('/bin/sh', ['-lc', options.command], {
             cwd: workdir,
             timeoutMs: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+            onStdout: options.onStdout,
+            onStderr: options.onStderr,
         });
     }
 }
@@ -288,7 +290,7 @@ mv -- "$tmp" ${shellQuote(target)}
     }
     async exec(options) {
         const workdir = this.remotePath(options.workdir || '.');
-        return this.execManaged(options.command, workdir, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+        return this.execManaged(options.command, workdir, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS, options.onStdout, options.onStderr);
     }
     async listTerminals() {
         const script = `
@@ -415,10 +417,10 @@ echo "Kill signal sent to terminal ${id} (pid $pid)."
         args.push(`${this.config.username}@${this.config.host}`);
         return args;
     }
-    async execRaw(script, timeoutMs) {
+    async execRaw(script, timeoutMs, onStdout, onStderr) {
         const tempKeyPath = this.config.privateKey ? writeTempPrivateKey(this.config.privateKey) : undefined;
         try {
-            return await runProcess('ssh', [...this.sshArgs(tempKeyPath), `sh -lc ${shellQuote(script)}`], { timeoutMs });
+            return await runProcess('ssh', [...this.sshArgs(tempKeyPath), `sh -lc ${shellQuote(script)}`], { timeoutMs, onStdout, onStderr });
         }
         finally {
             if (tempKeyPath) {
@@ -429,7 +431,7 @@ echo "Kill signal sent to terminal ${id} (pid $pid)."
     terminalRoot() {
         return path_1.default.posix.join(this.root, '.operator-chat', 'terminals');
     }
-    async execManaged(command, workdir, timeoutMs) {
+    async execManaged(command, workdir, timeoutMs, onStdout, onStderr) {
         const terminalId = (0, crypto_1.randomUUID)();
         const terminalDir = path_1.default.posix.join(this.terminalRoot(), terminalId);
         const commandBase64 = Buffer.from(command, 'utf8').toString('base64');
@@ -441,10 +443,14 @@ set -u
 dir=${shellQuote(terminalDir)}
 mkdir -p "$dir"
 printf '%s' ${shellQuote(commandBase64)} | base64 -d > "$dir/command"
+touch "$dir/stdout" "$dir/stderr"
 cat > "$dir/run.sh" <<'__OPERATOR_CHAT_RUNNER__'
 #!/bin/sh
 cd -- "$1"
 shift
+if command -v bash >/dev/null 2>&1; then
+  exec bash -lc "$1"
+fi
 exec sh -lc "$1"
 __OPERATOR_CHAT_RUNNER__
 chmod +x "$dir/run.sh"
@@ -452,7 +458,21 @@ setsid "$dir/run.sh" ${shellQuote(workdir)} "$(cat "$dir/command")" > "$dir/stdo
 pid=$!
 printf '%s' "$pid" > "$dir/pid"
 start=$(date +%s)
+stdout_offset=0
+stderr_offset=0
 while kill -0 "$pid" 2>/dev/null; do
+  stdout_size=$(wc -c < "$dir/stdout" 2>/dev/null || echo 0)
+  if [ "$stdout_size" -gt "$stdout_offset" ]; then
+    tail -c +$((stdout_offset + 1)) "$dir/stdout" 2>/dev/null || true
+    stdout_offset=$stdout_size
+  fi
+  stderr_size=$(wc -c < "$dir/stderr" 2>/dev/null || echo 0)
+  if [ "$stderr_size" -gt "$stderr_offset" ]; then
+    echo "__OPERATOR_CHAT_STDERR_CHUNK__"
+    tail -c +$((stderr_offset + 1)) "$dir/stderr" 2>/dev/null || true
+    echo "__OPERATOR_CHAT_STDOUT_CHUNK__"
+    stderr_offset=$stderr_size
+  fi
   now=$(date +%s)
   elapsed=$((now - start))
   if [ "$elapsed" -ge ${waitSeconds} ]; then
@@ -484,7 +504,7 @@ tail -c ${MAX_COMMAND_OUTPUT_BYTES} "$dir/stderr" 2>/dev/null || true
 exit "$code"
 `;
         const started = Date.now();
-        const result = await this.execRaw(script, timeoutMs + 15_000);
+        const result = await this.execRaw(script, timeoutMs + 15_000, onStdout, onStderr);
         const parsed = parseManagedCommandOutput(result.stdout);
         if (parsed) {
             return {
@@ -557,11 +577,15 @@ function runProcess(command, args, options) {
             }, 3000).unref();
         }, options.timeoutMs);
         child.stdout?.on('data', (chunk) => {
-            stdout += chunk.toString('utf8');
+            const text = chunk.toString('utf8');
+            options.onStdout?.(text);
+            stdout += text;
             stdout = truncateOutput(stdout).value;
         });
         child.stderr?.on('data', (chunk) => {
-            stderr += chunk.toString('utf8');
+            const text = chunk.toString('utf8');
+            options.onStderr?.(text);
+            stderr += text;
             stderr = truncateOutput(stderr).value;
         });
         child.on('error', (error) => {

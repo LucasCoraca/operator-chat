@@ -22,6 +22,8 @@ export interface CommandOptions {
     command: string;
     workdir?: string;
     timeoutMs?: number;
+    onStdout?: (chunk: string) => void;
+    onStderr?: (chunk: string) => void;
 }
 export interface CommandResult {
     stdout: string;

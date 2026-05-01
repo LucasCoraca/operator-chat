@@ -9,7 +9,7 @@ export type AgentMode = 'research_mode' | 'compose_reply_mode';
 const TRANSITION_TO_COMPOSE_TOOL = 'transition_to_compose_mode';
 
 export interface AgentStep {
-  type: 'action' | 'observation' | 'final_answer' | 'mode_transition';
+  type: 'action' | 'observation' | 'tool_progress' | 'final_answer' | 'mode_transition';
   content: string;
   actionName?: string;
   actionArgs?: Record<string, any>;
@@ -46,6 +46,14 @@ export interface CreateAgentRunRequest {
   workspaceRoot: string;
 }
 
+export interface ReActAgentOptions {
+  disableMaxIterations?: boolean;
+  runId?: string;
+  contextWindowTokens?: number;
+  reservedOutputTokens?: number;
+  autoCompactThreshold?: number;
+}
+
 export interface ChatPersonality {
   id: string;
   name: string;
@@ -69,6 +77,21 @@ export interface AgentCallbacks {
   onCreateAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
   onStepSave?: (chatId: string, step: AgentStep, allSteps: AgentStep[]) => void;
   onPartialFinalAnswer?: (chatId: string, partialContent: string) => void;
+  onSharedContextRequest?: (request: AgentContextRequest) => Promise<string | undefined>;
+  onContextPressure?: (request: AgentContextPressureRequest) => Promise<string | undefined>;
+}
+
+export interface AgentContextRequest {
+  chatId: string;
+  runId?: string;
+  state: AgentState;
+  tokenEstimate?: number;
+}
+
+export interface AgentContextPressureRequest extends AgentContextRequest {
+  tokenEstimate: number;
+  thresholdTokens: number;
+  maxPromptTokens: number;
 }
 
 interface ParsedAgentResponse {
@@ -165,6 +188,10 @@ export class ReActAgent {
   private currentMode: AgentMode = 'research_mode';
   private language: string = 'en';
   private model: string | undefined;
+  private options: ReActAgentOptions;
+  private activeState: AgentState | null = null;
+  private activeChatId: string | null = null;
+  private pendingUserMessages: string[] = [];
 
   constructor(
     llamaClient: LlamaClient,
@@ -173,7 +200,8 @@ export class ReActAgent {
     callbacks?: Partial<AgentCallbacks>,
     personality?: ChatPersonality | null,
     language?: string,
-    model?: string
+    model?: string,
+    options: ReActAgentOptions = {}
   ) {
     this.llamaClient = llamaClient;
     this.toolRegistry = toolRegistry;
@@ -181,6 +209,7 @@ export class ReActAgent {
     this.personality = personality || null;
     this.language = language || 'en';
     this.model = model;
+    this.options = options;
     this.callbacks = {
       onStep: () => {},
       onError: () => {},
@@ -195,6 +224,28 @@ export class ReActAgent {
     // Create debug log file path
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     this.debugLogFile = path.join(__dirname, `../../debug-${timestamp}.log`);
+  }
+
+  public addUserMessage(message: string): boolean {
+    const trimmed = message.trim();
+    if (!trimmed) {
+      return false;
+    }
+
+    const step: AgentStep = {
+      type: 'observation',
+      content: `User Message: ${trimmed}`,
+    };
+
+    if (this.activeState && this.activeChatId) {
+      this.activeState.steps.push(step);
+      this.callbacks.onStep(step);
+      this.callbacks.onStepSave?.(this.activeChatId, step, [...this.activeState.steps]);
+      return true;
+    }
+
+    this.pendingUserMessages.push(trimmed);
+    return true;
   }
 
   private setMode(mode: AgentMode): void {
@@ -500,11 +551,98 @@ export class ReActAgent {
     return `${content.slice(0, maxLength)}\n\n[Observation truncated before composing the final answer.]`;
   }
 
+  private compactObservationForPrompt(step: AgentStep): AgentStep {
+    if (step.type !== 'observation') {
+      return step;
+    }
+
+    const maxObservationChars = this.options.disableMaxIterations ? 6000 : 12000;
+    return {
+      ...step,
+      content: this.truncateForPrompt(step.content, maxObservationChars),
+    };
+  }
+
+  private compactDuplicateReadStepsForPrompt(steps: AgentStep[]): AgentStep[] {
+    const latestReadActionByPath = new Map<string, number>();
+
+    for (let index = 0; index < steps.length; index++) {
+      const step = steps[index];
+      if (step.type !== 'action' || step.actionName !== 'read') {
+        continue;
+      }
+
+      const filePath = String(step.actionArgs?.path || '').trim();
+      if (filePath) {
+        latestReadActionByPath.set(filePath, index);
+      }
+    }
+
+    if (latestReadActionByPath.size === 0) {
+      return steps;
+    }
+
+    return steps.map((step, index) => {
+      if (step.type !== 'observation') {
+        return step;
+      }
+
+      const previousStep = steps[index - 1];
+      if (previousStep?.type !== 'action' || previousStep.actionName !== 'read') {
+        return step;
+      }
+
+      const filePath = String(previousStep.actionArgs?.path || '').trim();
+      if (!filePath || latestReadActionByPath.get(filePath) === index - 1) {
+        return step;
+      }
+
+      return {
+        ...step,
+        content: `[Earlier read of ${filePath} omitted from raw replay. The latest read of this same path is kept later in the context.]`,
+      };
+    });
+  }
+
+  private getStepsForPrompt(state: AgentState, sharedContext?: string): AgentStep[] {
+    const compactedSteps = this.compactDuplicateReadStepsForPrompt(state.steps);
+
+    if (!this.options.disableMaxIterations || !sharedContext?.trim()) {
+      return compactedSteps;
+    }
+
+    const maxRawSteps = 30;
+    if (compactedSteps.length <= maxRawSteps) {
+      return compactedSteps;
+    }
+
+    return [
+      {
+        type: 'observation',
+        content: `[Earlier agent steps omitted from raw replay. Use <shared_agent_context> for compacted chat-level history. Keeping the latest ${maxRawSteps} raw steps below.]`,
+      },
+      ...compactedSteps.slice(-maxRawSteps),
+    ];
+  }
+
   private isSyntheticSummaryObservation(content: string): boolean {
     return content.startsWith('## COMPOSING FINAL ANSWER') ||
       content.startsWith('## RESEARCH PHASE COMPLETE') ||
       content.startsWith('## ITERATION LIMIT REACHED') ||
       content.startsWith('__agent_run_started__:');
+  }
+
+  private drainPendingUserMessages(chatId: string, state: AgentState): void {
+    const pendingMessages = this.pendingUserMessages.splice(0);
+    for (const message of pendingMessages) {
+      const step: AgentStep = {
+        type: 'observation',
+        content: `User Message: ${message}`,
+      };
+      state.steps.push(step);
+      this.callbacks.onStep(step);
+      this.callbacks.onStepSave?.(chatId, step, [...state.steps]);
+    }
   }
 
   private getComposableObservations(state: AgentState): string[] {
@@ -642,6 +780,143 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
     return this.isToolAutoApproved(toolName, toolPreferences);
   }
 
+  private getToolActionIndexes(state: AgentState, toolNames?: string[]): number[] {
+    return state.steps
+      .map((step, index) => ({ step, index }))
+      .filter(({ step }) => step.type === 'action' && (!toolNames || toolNames.includes(step.actionName || '')))
+      .map(({ index }) => index);
+  }
+
+  private getLastObservationAfter(state: AgentState, actionIndex: number): string {
+    for (let index = actionIndex + 1; index < state.steps.length; index++) {
+      const step = state.steps[index];
+      if (step.type === 'action') {
+        break;
+      }
+      if (step.type === 'observation') {
+        return step.content;
+      }
+    }
+    return '';
+  }
+
+  private normalizeAgentPath(filePath: string, workspace?: WorkspaceConfig): string {
+    let normalized = filePath.trim().replace(/\\/g, '/').replace(/\/+/g, '/');
+    const root = workspace?.ssh?.root?.trim().replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+    if (root && normalized.startsWith(`${root}/`)) {
+      normalized = normalized.slice(root.length + 1);
+    }
+    return normalized.replace(/^\.\//, '');
+  }
+
+  private getReadKey(args: Record<string, any>, workspace?: WorkspaceConfig): string | null {
+    const filePath = String(args.path || '').trim();
+    if (!filePath) {
+      return null;
+    }
+
+    const offset = args.offset === undefined || args.offset === null ? 1 : Number(args.offset);
+    const limit = args.limit === undefined || args.limit === null ? 300 : Number(args.limit);
+    return `${this.normalizeAgentPath(filePath, workspace)}::${Number.isFinite(offset) ? offset : 1}::${Number.isFinite(limit) ? limit : 300}`;
+  }
+
+  private didFileChangeAfterRead(state: AgentState, normalizedPath: string, readActionIndex: number, workspace?: WorkspaceConfig): boolean {
+    for (let index = readActionIndex + 1; index < state.steps.length; index++) {
+      const step = state.steps[index];
+      if (step.type !== 'action' || !step.actionName) {
+        continue;
+      }
+
+      if (['write', 'edit'].includes(step.actionName)) {
+        const changedPath = this.normalizeAgentPath(String(step.actionArgs?.path || step.actionArgs?.filePath || ''), workspace);
+        if (changedPath === normalizedPath) {
+          return true;
+        }
+      }
+
+      if (step.actionName === 'apply_patch') {
+        const patchText = String(step.actionArgs?.patchText || '');
+        if (patchText.includes(normalizedPath)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  private getDuplicateReadObservation(state: AgentState, args: Record<string, any>, workspace?: WorkspaceConfig): string | null {
+    const requestedKey = this.getReadKey(args, workspace);
+    if (!requestedKey) {
+      return null;
+    }
+
+    const [normalizedPath] = requestedKey.split('::');
+    for (let index = state.steps.length - 2; index >= 0; index--) {
+      const step = state.steps[index];
+      if (step.type !== 'action' || step.actionName !== 'read' || !step.actionArgs) {
+        continue;
+      }
+
+      const previousKey = this.getReadKey(step.actionArgs, workspace);
+      if (previousKey !== requestedKey) {
+        continue;
+      }
+
+      if (this.didFileChangeAfterRead(state, normalizedPath, index, workspace)) {
+        return null;
+      }
+
+      const lastObservation = this.getLastObservationAfter(state, index);
+      const preview = lastObservation
+        ? ` Previous read preview:\n${this.truncateForPrompt(lastObservation, 1200)}`
+        : '';
+      return `Duplicate read skipped for ${normalizedPath}. This exact path/range was already read and the file has not changed since. Use the previous read result in context, use grep for a targeted lookup, or request a different offset/limit if another range is needed.${preview}`;
+    }
+
+    return null;
+  }
+
+  private validateComposeReadiness(
+    state: AgentState,
+    toolPreferences?: Record<string, ChatToolPreference>,
+    workspace?: WorkspaceConfig
+  ): string | null {
+    const enabledToolNames = this.getEnabledToolNames(toolPreferences);
+    const isSpawnedRemoteAgent = workspace?.type === 'ssh_remote'
+      && workspace.ssh?.enabled
+      && !enabledToolNames.includes('create_agent');
+    if (!isSpawnedRemoteAgent) {
+      return null;
+    }
+
+    const actionIndexes = this.getToolActionIndexes(state);
+    if (actionIndexes.length === 0) {
+      return 'You have not used any remote tools yet. Continue with the next concrete tool call instead of composing a final answer.';
+    }
+
+    const modificationIndexes = this.getToolActionIndexes(state, ['write', 'edit', 'apply_patch']);
+    if (modificationIndexes.length > 0) {
+      const lastModificationIndex = modificationIndexes[modificationIndexes.length - 1];
+      const laterVerification = state.steps
+        .slice(lastModificationIndex + 1)
+        .some((step) => step.type === 'action' && ['bash', 'read', 'grep'].includes(step.actionName || ''));
+      if (!laterVerification) {
+        return 'You modified files but have not inspected or verified the result afterward. Run a bounded verification command or read/search the changed files before composing.';
+      }
+    }
+
+    const bashIndexes = this.getToolActionIndexes(state, ['bash']);
+    if (bashIndexes.length > 0) {
+      const lastBashObservation = this.getLastObservationAfter(state, bashIndexes[bashIndexes.length - 1]);
+      if (lastBashObservation.includes('Status: still running in background terminal') || lastBashObservation.includes('__OPERATOR_CHAT_BACKGROUND__')) {
+        return 'The last command is still running in a managed background terminal. Use terminal_read, terminal_list, or terminal_kill as appropriate before composing.';
+      }
+    }
+
+    return null;
+  }
+
   private getLanguageInstruction(): string {
     const languageInstructions: Record<string, string> = {
       'en': 'You MUST respond in English. All your responses and thoughts must be in English.',
@@ -684,11 +959,11 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
     const enabledToolNames = this.getEnabledToolNames(toolPreferences);
     const toolsAvailable = this.toolRegistry.getFilteredTools(enabledToolNames).length > 0;
     const canCreateAgent = enabledToolNames.includes('create_agent');
-    const remoteToolNames = enabledToolNames.filter((toolName) => ['list', 'read', 'glob', 'grep', 'bash', 'terminal_list', 'terminal_read', 'terminal_kill', 'write', 'edit', 'apply_patch'].includes(toolName));
+    const remoteToolNames = enabledToolNames.filter((toolName) => ['list', 'read', 'glob', 'grep', 'bash', 'terminal_list', 'terminal_read', 'terminal_kill', 'write', 'edit', 'apply_patch', 'memory_get', 'memory_set', 'memory_checkpoint'].includes(toolName));
     const workspaceSection = workspace?.type === 'ssh_remote' && workspace.ssh?.enabled
       ? canCreateAgent
-        ? `\n\n## ACTIVE WORKSPACE\nThe system has SSH credentials for a remote environment.\n- Default host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Default workspace root: ${workspace.ssh.root}\n- For any request to run commands, inspect a codebase, edit files, implement changes, fix bugs, run tests, continue previous remote work, or delegate coding work, call \`create_agent\` with a title, a complete prompt, and the absolute remote workspaceRoot. Do not tell the user to run commands manually.\n- The created agent is separate from this chat response and its live trace will appear in the conversation.\n- Answer directly only for conceptual questions that do not require remote workspace inspection, command execution, or file edits.\n`
-        : `\n\n## ACTIVE WORKSPACE\nYou are the spawned SSH coding agent for a remote environment.\n- Host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Workspace root: ${workspace.ssh.root}\n- Your enabled remote tools are: ${remoteToolNames.join(', ') || 'none'}.\n- Continue using the remote tools to inspect files, run commands, edit files, and verify the task. Do not tell the user to run commands manually when a tool can do it.\n- Use \`list\`, \`glob\`, \`grep\`, and \`read\` for inspection. Use \`edit\`, \`write\`, and \`apply_patch\` for file modifications. Use \`bash\` for builds, tests, and commands.\n- If a \`bash\` command starts a long-running process, it may return a background terminal id instead of blocking. Use \`terminal_read\` to inspect later output, \`terminal_list\` to find running terminals, and \`terminal_kill\` to stop a terminal when needed. Keep \`terminal_read\` bounded with tailLines/maxBytes.\n- Prefer file-editing tools over shell redirection for code changes. Pass \`workdir\` to \`bash\` instead of using \`cd\`.\n- Treat this as a real remote machine: avoid destructive commands unless explicitly needed and approved.\n`
+        ? `\n\n## ACTIVE WORKSPACE\nThe system has SSH credentials for a remote environment.\n- Default host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Default workspace root: ${workspace.ssh.root}\n- For any request to run commands, inspect a codebase, edit files, implement changes, fix bugs, run tests, continue previous remote work, or delegate coding work, call \`create_agent\` with a title, a complete prompt, and the absolute remote workspaceRoot. Do not tell the user to run commands manually.\n- The \`create_agent\` prompt must include clear \`Success Criteria\`, \`Non-goals\`, and \`Required Verification\` sections. Define what solved means, what should not be investigated, and the bounded checks the coding agent should run before stopping.\n- The created agent is separate from this chat response and its live trace will appear in the conversation.\n- Answer directly only for conceptual questions that do not require remote workspace inspection, command execution, or file edits.\n`
+        : `\n\n## ACTIVE WORKSPACE\nYou are the spawned SSH coding agent for a remote environment.\n- Host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Workspace root: ${workspace.ssh.root}\n- Your enabled remote tools are: ${remoteToolNames.join(', ') || 'none'}.\n- Continue using the remote tools to inspect files, run commands, edit files, and verify the task. Do not tell the user to run commands manually when a tool can do it.\n- Use \`list\`, \`glob\`, \`grep\`, and \`read\` for inspection. Use \`edit\`, \`write\`, and \`apply_patch\` for file modifications. Use \`bash\` for builds, tests, and commands.\n- Before reading a file, check the shared context and recent tool results. Do not repeatedly read the same file unless it changed, you need a different line range, or the previous read was insufficient. Prefer \`grep\` or targeted \`read\` offsets over re-reading whole files.\n- Use \`memory_get\` when you need to recall project state, file summaries, commands, errors, or prior progress. Use \`memory_checkpoint\` after major milestones, after several file edits, before compaction, and before the final answer.\n- Do not rewrite files already represented in backend memory unless you are intentionally changing their content. If you need to recall what you wrote, call \`memory_get\` instead of \`write\` or \`read\`.\n- Treat any \`User Message:\` observation in your trace as direct steering from the user for this running coding agent.\n- Follow the parent chat's \`Success Criteria\`, \`Non-goals\`, and \`Required Verification\` from your task prompt. When those success criteria are met and the required verification passes, stop tool use and compose the final answer. Do not continue investigating non-goals or unrelated anomalies.\n- Do not call \`${TRANSITION_TO_COMPOSE_TOOL}\` while implementation, file creation, file edits, dependency installation, tests, or verification remain. Keep calling tools instead.\n- If you modify files with \`write\`, \`edit\`, or \`apply_patch\`, inspect or verify afterward with \`read\`, \`grep\`, or \`bash\` before composing the final answer.\n- If a \`bash\` command starts a long-running process, it may return a background terminal id instead of blocking. Use \`terminal_read\` to inspect later output, \`terminal_list\` to find running terminals, and \`terminal_kill\` to stop a terminal when needed. Keep \`terminal_read\` bounded with tailLines/maxBytes.\n- Prefer file-editing tools over shell redirection for code changes. Pass \`workdir\` to \`bash\` instead of using \`cd\`.\n- Treat this as a real remote machine: avoid destructive commands unless explicitly needed and approved.\n`
       : `\n\n## ACTIVE WORKSPACE\nSSH agent mode is not available because no remote workspace is configured in Settings. If the user asks you to run commands, inspect a codebase, edit files, or start an agent, explain that the remote workspace must first be configured in Settings with a host/IP, username, workspace root, and SSH key.\n`;
 
     // Build personality section
@@ -713,9 +988,10 @@ IMPORTANT: These memories may contain historical dates or information. Always us
         : '\n\n## URGENT\nProvide your best final answer now. Do not call tools on this turn.'
       : '';
 
-    // Add iterations remaining context
     const iterationsRemaining = this.maxIterations - currentIteration;
-    const iterationsContext = `\n\n## ITERATIONS REMAINING: ${iterationsRemaining} / ${this.maxIterations}\nUse your iterations wisely. The system will automatically transition to the next phase when you reach the iteration limit.`;
+    const iterationsContext = this.options.disableMaxIterations
+      ? `\n\n## AGENT LOOP\nIteration: ${currentIteration}. There is no automatic compose step for unfinished coding work. Continue tool execution until the requested task is actually complete, or until the user stops the agent.`
+      : `\n\n## ITERATIONS REMAINING: ${iterationsRemaining} / ${this.maxIterations}\nUse your iterations wisely. The system will automatically transition to the next phase when you reach the iteration limit.`;
 
     return `Knowledge Cutoff: December 2023
 Current Date: ${dateTime}
@@ -746,7 +1022,7 @@ You are in RESEARCH_MODE.
 - Do NOT output ordinary assistant prose as your main response in this mode.
 - When research is complete and you are ready to answer, call the native tool \`${TRANSITION_TO_COMPOSE_TOOL}\`.
 - If you still need information, call the next tool directly using native function calling.
-- On the final research turn, call \`${TRANSITION_TO_COMPOSE_TOOL}\` immediately. Do not answer in prose.
+- Only call \`${TRANSITION_TO_COMPOSE_TOOL}\` after the requested work is complete and any edits have been verified.
 
 ## SOURCE CITATION REQUIREMENT
 When you use web_search or browser_visit tools, you must it is imperative to do so cite sources in your final response with URL and title/description.
@@ -809,7 +1085,8 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
     forceFinalAnswer: boolean = false,
     toolPreferences?: Record<string, ChatToolPreference>,
     memories: string[] = [],
-    workspace?: WorkspaceConfig
+    workspace?: WorkspaceConfig,
+    sharedContext?: string
   ): ChatMessage[] {
     const messages: ChatMessage[] = [
       {
@@ -823,6 +1100,13 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
       messages.push({
         role: msg.role,
         content: msg.content,
+      });
+    }
+
+    if (sharedContext?.trim()) {
+      messages.push({
+        role: 'user',
+        content: `<shared_agent_context>\n${sharedContext.trim()}\n</shared_agent_context>`,
       });
     }
 
@@ -854,7 +1138,8 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
       | null = null;
     let toolCallCounter = 0;
 
-    for (const step of state.steps) {
+    for (const originalStep of this.getStepsForPrompt(state, sharedContext)) {
+      const step = this.compactObservationForPrompt(originalStep);
       if (this.currentMode === 'compose_reply_mode') {
         if (step.type === 'observation') {
           messages.push({
@@ -925,6 +1210,86 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
     return messages;
   }
 
+  private getContextBudget(): { maxPromptTokens?: number; thresholdTokens?: number } {
+    const contextWindowTokens = Number(this.options.contextWindowTokens || 0);
+    if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+      return {};
+    }
+
+    const reservedOutputTokens = Math.max(0, Number(this.options.reservedOutputTokens ?? 10000));
+    const maxPromptTokens = Math.max(1000, contextWindowTokens - reservedOutputTokens);
+    const autoCompactThreshold = Math.min(0.98, Math.max(0.1, Number(this.options.autoCompactThreshold ?? 0.82)));
+    return {
+      maxPromptTokens,
+      thresholdTokens: Math.floor(maxPromptTokens * autoCompactThreshold),
+    };
+  }
+
+  private async buildManagedConversationHistory(
+    chatId: string,
+    userMessage: string,
+    state: AgentState,
+    conversationHistory: Array<{ role: 'user' | 'assistant'; content: string }> = [],
+    forceFinalAnswer: boolean = false,
+    toolPreferences?: Record<string, ChatToolPreference>,
+    memories: string[] = [],
+    workspace?: WorkspaceConfig
+  ): Promise<ChatMessage[]> {
+    let sharedContext = await this.callbacks.onSharedContextRequest?.({
+      chatId,
+      runId: this.options.runId,
+      state,
+    });
+
+    let messages = this.buildConversationHistory(
+      userMessage,
+      state,
+      conversationHistory,
+      forceFinalAnswer,
+      toolPreferences,
+      memories,
+      workspace,
+      sharedContext
+    );
+
+    const { maxPromptTokens, thresholdTokens } = this.getContextBudget();
+    if (!maxPromptTokens || !thresholdTokens || !this.callbacks.onContextPressure) {
+      return messages;
+    }
+
+    const tokenEstimate = await this.llamaClient.countChatTokens(messages);
+    if (tokenEstimate < thresholdTokens) {
+      return messages;
+    }
+
+    const compactedContext = await this.callbacks.onContextPressure({
+      chatId,
+      runId: this.options.runId,
+      state,
+      tokenEstimate,
+      thresholdTokens,
+      maxPromptTokens,
+    });
+
+    if (!compactedContext?.trim()) {
+      return messages;
+    }
+
+    sharedContext = compactedContext;
+    messages = this.buildConversationHistory(
+      userMessage,
+      state,
+      conversationHistory,
+      forceFinalAnswer,
+      toolPreferences,
+      memories,
+      workspace,
+      sharedContext
+    );
+
+    return messages;
+  }
+
   async run(
     chatId: string,
     userMessage: string,
@@ -949,17 +1314,20 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
     // Set running state and create AbortController for cancellation
     this.isRunning = true;
     this.abortController = new AbortController();
+    this.activeState = state;
+    this.activeChatId = chatId;
 
     try {
       this.logDebug('========================================');
       this.logDebug(`Starting agent run for: "${userMessage.substring(0, 100)}..."`);
       this.logDebug(`Sandbox: ${sandboxId}`);
       this.logDebug(`User: ${userId}`);
-      this.logDebug(`Max iterations: ${this.maxIterations}`);
+      this.logDebug(`Max iterations: ${this.options.disableMaxIterations ? 'disabled' : this.maxIterations}`);
       this.logDebug('========================================');
 
-      while (state.iteration < this.maxIterations && !state.isComplete && !this.isCancelled) {
+      while ((this.options.disableMaxIterations || state.iteration < this.maxIterations) && !state.isComplete && !this.isCancelled) {
         state.iteration++;
+        this.drainPendingUserMessages(chatId, state);
 
         // Check for cancellation at start of each iteration
         if (this.isCancelled) {
@@ -967,8 +1335,7 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
           break;
         }
 
-        // Force final answer on the last iteration
-        const forceFinalAnswer = state.iteration >= this.maxIterations - 1;
+        const forceFinalAnswer = !this.options.disableMaxIterations && state.iteration >= this.maxIterations - 1;
         if (forceFinalAnswer) {
           this.logDebug(`\n--- ITERATION ${state.iteration} (FORCING FINAL ANSWER) ---`);
         } else {
@@ -976,7 +1343,8 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
         }
 
         // Build conversation history
-        const messages = this.buildConversationHistory(
+        const messages = await this.buildManagedConversationHistory(
+          chatId,
           userMessage,
           state,
           conversationHistory,
@@ -1102,7 +1470,8 @@ Now compose your final answer as normal assistant text.`;
               // Force one more iteration in compose mode
               state.iteration++;
               
-              const messages = this.buildConversationHistory(
+              const messages = await this.buildManagedConversationHistory(
+                chatId,
                 userMessage,
                 state,
                 conversationHistory,
@@ -1189,6 +1558,20 @@ Now compose your final answer as normal assistant text.`;
 
         // Handle mode transition from research_mode to compose_reply_mode
         if (parsedResponse.type === 'mode_transition') {
+          const readinessError = this.validateComposeReadiness(state, toolPreferences, workspace);
+          if (readinessError) {
+            const correctiveObservation = `Cannot enter compose mode yet: ${readinessError}`;
+            this.logDebug(correctiveObservation);
+            this.replaceLatestCorrection(state, correctiveObservation);
+            const step: AgentStep = {
+              type: 'observation',
+              content: correctiveObservation,
+            };
+            this.callbacks.onStepSave?.(chatId, step, [...state.steps]);
+            state.iteration--;
+            continue;
+          }
+
           this.resetInvalidTurnState();
           this.logDebug(`Mode transition detected: ${this.currentMode} -> ${parsedResponse.targetMode}`);
           
@@ -1297,6 +1680,21 @@ Now compose your final answer using all the information above as normal assistan
           this.callbacks.onStep(actionStep);
           this.callbacks.onStepSave?.(chatId, actionStep, [...state.steps]);
 
+          if (parsedResponse.toolName === 'read') {
+            const duplicateReadObservation = this.getDuplicateReadObservation(state, parsedResponse.toolArgs, workspace);
+            if (duplicateReadObservation) {
+              this.logDebug(duplicateReadObservation);
+              const duplicateStep: AgentStep = {
+                type: 'observation',
+                content: duplicateReadObservation,
+              };
+              state.steps.push(duplicateStep);
+              this.callbacks.onStep(duplicateStep);
+              this.callbacks.onStepSave?.(chatId, duplicateStep, [...state.steps]);
+              continue;
+            }
+          }
+
           if (toolPolicy.requiresApproval && !this.shouldBypassApproval(parsedResponse.toolName, toolPreferences, approvalMode)) {
             const waitingForApprovalObservation = `Awaiting user approval for tool '${parsedResponse.toolName}' before execution.`;
             const approvalStep: AgentStep = {
@@ -1335,9 +1733,18 @@ Now compose your final answer using all the information above as normal assistan
               sandboxId,
               userId,
               chatId,
+              agentRunId: this.options.runId,
               model: this.model,
               workspace,
+              agentMemory: this.toolRegistry.agentMemoryService,
               createAgentRun: this.callbacks.onCreateAgentRun,
+              emitToolProgress: (content: string) => {
+                this.callbacks.onStep({
+                  type: 'tool_progress',
+                  content,
+                  actionName: parsedResponse.toolName,
+                });
+              },
             },
             this.getEnabledToolNames(toolPreferences)
           );
@@ -1396,115 +1803,12 @@ Now compose your final answer using all the information above as normal assistan
       this.logDebug(`Debug log file: ${this.debugLogFile}`);
       this.logDebug('========================================\n');
 
-      // Check if we hit max iterations - transition to compose mode instead of erroring
       if (!state.isComplete) {
-        this.logDebug('Max iterations reached - transitioning to compose_reply_mode');
-        
-        // If still in research_mode, transition to compose_reply_mode
-        if (this.currentMode === 'research_mode') {
-          this.setMode('compose_reply_mode');
-          
-          // Add mode transition step
-          const modeStep: AgentStep = {
-            type: 'mode_transition',
-            content: `Maximum iterations reached. Transitioning to compose_reply_mode to provide the best answer with gathered information.`,
-            targetMode: 'compose_reply_mode',
-          };
-          state.steps.push(modeStep);
-          this.callbacks.onStep(modeStep);
-          this.callbacks.onStepSave?.(chatId, modeStep, [...state.steps]);
-          
-          // Add summary observation of all gathered information
-          const observations = this.getComposableObservations(state);
-          
-          if (observations.length > 0) {
-            const summaryObservation = `## ITERATION LIMIT REACHED - COMPOSING FINAL ANSWER
-
-You have reached the maximum number of iterations. Based on the information gathered so far:
-
-${observations.map((obs, idx) => `### Observation ${idx + 1}:\n${obs}`).join('\n\n')}
-
----
-Now compose your final answer using all the information above as normal assistant text.`;
-            
-            const summaryStep: AgentStep = {
-              type: 'observation',
-              content: summaryObservation,
-            };
-            state.steps.push(summaryStep);
-            this.callbacks.onStep(summaryStep);
-            this.callbacks.onStepSave?.(chatId, summaryStep, [...state.steps]);
-          }
-          
-          // Force one more iteration to get the final answer in compose mode
-          state.iteration++;
-          const forceFinalAnswer = true;
-          
-          const messages = this.buildConversationHistory(
-            userMessage,
-            state,
-            conversationHistory,
-            forceFinalAnswer,
-            toolPreferences,
-            memories,
-            workspace
-          );
-          
-          const shouldEmitFinalAnswer = true; // In compose mode, emit directly
-          const finalAnswerStreamer = new FinalAnswerStreamer((token) => {
-            this.callbacks.onFinalAnswerToken!(token);
-          }, shouldEmitFinalAnswer, (partialContent) => this.callbacks.onPartialFinalAnswer?.(chatId, partialContent));
-
-              const streamedResult = await this.llamaClient.chatStream(
-                messages,
-                (timings) => {
-                  if (timings) {
-                    this.callbacks.onTimings!(timings);
-                  }
-                },
-                this.abortController,
-                undefined,
-                { 
-                  onReasoningToken: (token) => {
-                    this.callbacks.onReasoningToken!(token);
-                  },
-                  onContentToken: (token) => {
-                    finalAnswerStreamer.push(token);
-                  },
-                  model: this.model,
-                }
-              );
-          finalAnswerStreamer.finalize();
-          
-          const parsedResponse = this.parseStreamedResponse(streamedResult, true);
-          
-          if (parsedResponse.type === 'final_answer' && parsedResponse.finalAnswer) {
-            state.finalAnswer = parsedResponse.finalAnswer;
-            const finalStep: AgentStep = {
-              type: 'final_answer',
-              content: state.finalAnswer,
-            };
-            state.steps.push(finalStep);
-            this.callbacks.onStep(finalStep);
-            this.callbacks.onStepSave?.(chatId, finalStep, [...state.steps]);
-            state.isComplete = true;
-            await this.emitFinalAnswerChunks([state.finalAnswer]);
-          } else {
-            // Fallback if no valid final answer
-            state.finalAnswer = 'Based on my research, I was unable to provide a complete answer within the iteration limit. Here is what I found: ' + 
-              (observations.length > 0 ? observations[observations.length - 1].substring(0, 500) : 'No information gathered.');
-            const finalStep: AgentStep = {
-              type: 'final_answer',
-              content: state.finalAnswer,
-            };
-            state.steps.push(finalStep);
-            this.callbacks.onStep(finalStep);
-            this.callbacks.onStepSave?.(chatId, finalStep, [...state.steps]);
-            state.isComplete = true;
-            await this.emitFinalAnswerChunks([state.finalAnswer]);
-          }
+        if (this.options.disableMaxIterations) {
+          this.logDebug('Agent run exited before completion.');
         } else {
-          // Already in compose mode, just force final answer
+          this.logDebug('Max iterations reached - forcing final response.');
+          this.setMode('compose_reply_mode');
           state.finalAnswer = 'I was unable to complete the task within the maximum number of iterations. Please try rephrasing your question or breaking it into smaller parts.';
           const finalStep: AgentStep = {
             type: 'final_answer',
@@ -1525,6 +1829,8 @@ Now compose your final answer using all the information above as normal assistan
     } finally {
       // Always reset running state when done
       this.isRunning = false;
+      this.activeState = null;
+      this.activeChatId = null;
       this.logDebug('Agent run finished, isRunning set to false');
     }
 

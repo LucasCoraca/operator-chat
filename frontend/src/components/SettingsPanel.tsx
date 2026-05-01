@@ -33,6 +33,10 @@ interface Settings {
     strictHostKeyChecking: boolean;
     approvalPolicy: 'ask' | 'auto-approve';
     toolApprovals: Record<string, 'ask' | 'auto-approve'>;
+    agentModel?: string;
+    contextWindowTokens: number;
+    reservedOutputTokens: number;
+    autoCompactThreshold: number;
   };
 }
 
@@ -74,6 +78,7 @@ interface SettingsPanelProps {
   onClose: () => void;
   personalities: ChatPersonality[];
   tools: Tool[];
+  models: string[];
   onManagePersonalities: () => void;
   isPersonalityManagerOpen?: boolean;
 }
@@ -84,6 +89,7 @@ function SettingsPanel({
   onClose,
   personalities,
   tools,
+  models,
   onManagePersonalities,
   isPersonalityManagerOpen = false
 }: SettingsPanelProps) {
@@ -205,7 +211,7 @@ function SettingsPanel({
 
   const handleRemoteWorkspaceChange = (
     field: keyof Settings['remoteWorkspace'],
-    value: string | number | boolean
+    value: string | number | boolean | undefined
   ) => {
     setFormData((prev) => ({
       ...prev,
@@ -468,6 +474,60 @@ function SettingsPanel({
               />
               Strict host key checking
             </label>
+
+            <div className="grid gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-3">
+              <label className="space-y-1 text-xs text-zinc-400 md:col-span-3">
+                <span>Agent model</span>
+                <select
+                  value={formData.remoteWorkspace.agentModel || ''}
+                  onChange={(event) => handleRemoteWorkspaceChange('agentModel', event.target.value || undefined)}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                >
+                  <option value="">Use current chat model</option>
+                  {models.map((model) => (
+                    <option key={model} value={model}>{model}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Context window</span>
+                <input
+                  type="number"
+                  min={4096}
+                  value={formData.remoteWorkspace.contextWindowTokens}
+                  onChange={(event) => handleRemoteWorkspaceChange('contextWindowTokens', Number(event.target.value) || 128000)}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Reserved output tokens</span>
+                <input
+                  type="number"
+                  min={0}
+                  value={formData.remoteWorkspace.reservedOutputTokens}
+                  onChange={(event) => handleRemoteWorkspaceChange('reservedOutputTokens', Number(event.target.value) || 0)}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+
+              <label className="space-y-1 text-xs text-zinc-400">
+                <span>Auto compact threshold</span>
+                <input
+                  type="number"
+                  min={10}
+                  max={98}
+                  value={Math.round((formData.remoteWorkspace.autoCompactThreshold || 0.82) * 100)}
+                  onChange={(event) => handleRemoteWorkspaceChange('autoCompactThreshold', Math.max(10, Math.min(98, Number(event.target.value) || 82)) / 100)}
+                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                />
+              </label>
+
+              <p className="text-xs leading-5 text-zinc-500 md:col-span-3">
+                The backend uses llama.cpp /tokenize to estimate prompt size. It prunes noisy tool output first and only asks the model to compact shared agent context when usage crosses this threshold.
+              </p>
+            </div>
 
             <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
               <div>

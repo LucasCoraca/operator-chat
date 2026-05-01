@@ -15,7 +15,7 @@ import CodeBlock, { PreBlock } from './CodeBlock';
 import operatorLogo from '../assets/logo.png';
 
 interface AgentStep {
-  type: 'thought' | 'action' | 'observation' | 'mode_transition' | 'final_answer';
+  type: 'thought' | 'action' | 'observation' | 'tool_progress' | 'mode_transition' | 'final_answer';
   content: string;
   actionName?: string;
   actionArgs?: Record<string, any>;
@@ -179,9 +179,145 @@ function normalizeAgentSteps(steps: AgentStep[], hasResolvedAssistantResponse: b
 
 // Virtual scrolling configuration
 const SCROLL_THRESHOLD = 300; // Pixels from bottom to show jump button
+const TERMINAL_OUTPUT_PREVIEW_LINES = 15;
+const TERMINAL_OUTPUT_PREVIEW_CHARS = 3000;
+const AGENT_TASK_PREVIEW_CHARS = 360;
 const markdownRemarkPlugins: PluggableList = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]];
 const markdownRehypePlugins: PluggableList = [rehypeKatex];
 const markdownComponents = { code: CodeBlock, pre: PreBlock };
+
+function TerminalOutput({ normalized, type }: { normalized: string; type?: AgentTerminalEntry['type'] }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const lines = normalized.split('\n');
+  const isDiffLine = (line: string) => /^\s*\d+\s+[+-]\s/.test(line)
+    || /^[+-](?![+-])/.test(line)
+    || line.startsWith('*** ')
+    || line.startsWith('@@')
+    || line.startsWith('• Edited ');
+  const isDiffOutput = type === 'tool' && lines.some(isDiffLine);
+  const isLongOutput = lines.length > TERMINAL_OUTPUT_PREVIEW_LINES || normalized.length > TERMINAL_OUTPUT_PREVIEW_CHARS;
+  const previewText = normalized.length > TERMINAL_OUTPUT_PREVIEW_CHARS
+    ? isDiffOutput
+      ? normalized.slice(0, TERMINAL_OUTPUT_PREVIEW_CHARS)
+      : normalized.slice(-TERMINAL_OUTPUT_PREVIEW_CHARS)
+    : normalized;
+  const previewTextLines = previewText.split('\n');
+  const previewLines = isDiffOutput
+    ? previewTextLines.slice(0, TERMINAL_OUTPUT_PREVIEW_LINES)
+    : previewTextLines.slice(-TERMINAL_OUTPUT_PREVIEW_LINES);
+  const visible = isLongOutput && !isExpanded ? previewLines : lines;
+  const hiddenLineCount = Math.max(0, lines.length - visible.length);
+  const hiddenCharCount = Math.max(0, normalized.length - visible.join('\n').length);
+  const hiddenSummary = hiddenLineCount > 0
+    ? `${hiddenLineCount} more lines`
+    : `${hiddenCharCount} more characters`;
+  const previewLabel = isDiffOutput
+    ? `[showing first ${visible.length} of ${lines.length} lines]`
+    : `[showing last ${visible.length} of ${lines.length} lines]`;
+  const toggleOutput = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsExpanded((value) => !value);
+  };
+
+  if (isDiffOutput) {
+    const getDiffLineClass = (line: string) => {
+      if (/^\s*\d+\s+\+\s/.test(line) || /^\+(?![+])/.test(line)) {
+        return 'border-emerald-500/10 bg-emerald-500/10 text-emerald-200';
+      }
+      if (/^\s*\d+\s+-\s/.test(line) || /^-(?![-])/.test(line)) {
+        return 'border-red-500/10 bg-red-500/10 text-red-200';
+      }
+      if (line.startsWith('• Edited ')) {
+        return 'border-transparent text-zinc-100 font-semibold';
+      }
+      if (line.startsWith('*** ') || line.startsWith('@@')) {
+        return 'border-transparent text-zinc-500';
+      }
+      return 'border-transparent text-zinc-400';
+    };
+
+    return (
+      <div className="mt-2 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5">
+        {!isExpanded && isLongOutput && (
+          <div className="mb-2 whitespace-pre-wrap break-words text-zinc-500">
+            {previewLabel}
+          </div>
+        )}
+        {visible.map((line, index) => (
+          <div
+            key={`${index}-${line}`}
+            className={`-mx-1 border-l-2 px-1 whitespace-pre-wrap break-words ${getDiffLineClass(line)}`}
+          >
+            {line || ' '}
+          </div>
+        ))}
+        {isLongOutput && (
+          <button
+            type="button"
+            onClick={toggleOutput}
+            className="mt-3 rounded-md border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/5"
+          >
+            {isExpanded ? 'Show less' : `Show full output (${hiddenSummary})`}
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
+      {!isExpanded && isLongOutput && (
+        <div className="mb-2 whitespace-pre-wrap break-words text-zinc-500">
+          {previewLabel}
+        </div>
+      )}
+      <pre className="whitespace-pre-wrap break-words">{visible.join('\n')}</pre>
+      {isLongOutput && (
+        <button
+          type="button"
+          onClick={toggleOutput}
+          className="mt-3 rounded-md border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/5"
+        >
+          {isExpanded ? 'Show less' : `Show full output (${hiddenSummary})`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AgentTaskPreview({ prompt }: { prompt: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const normalized = prompt.trim();
+  const isLong = normalized.length > AGENT_TASK_PREVIEW_CHARS || normalized.split('\n').length > 4;
+  const preview = normalized.length > AGENT_TASK_PREVIEW_CHARS
+    ? `${normalized.slice(0, AGENT_TASK_PREVIEW_CHARS).trimEnd()}...`
+    : normalized.split('\n').slice(0, 4).join('\n');
+  const visible = isLong && !isExpanded ? preview : normalized;
+
+  return (
+    <div className="mt-1">
+      <div className="prose prose-invert max-w-none break-words text-sm leading-6 text-zinc-300 prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-zinc-100 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-code:text-emerald-200">
+        <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+          {visible}
+        </ReactMarkdown>
+      </div>
+      {isLong && (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setIsExpanded((value) => !value);
+          }}
+          className="mt-2 rounded-md border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/5"
+        >
+          {isExpanded ? 'Show less' : 'Show full task'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function getChatNameFromQuery(query: string): string {
   const normalized = query.replace(/\s+/g, ' ').trim();
@@ -228,6 +364,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
   const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
+  const [agentSteeringDrafts, setAgentSteeringDrafts] = useState<Record<string, string>>({});
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -263,6 +400,10 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     : allToolsEnabled
       ? t('chat.allTools')
       : t('chat.toolCount', { count: enabledTools.length });
+  const hasRunningAgentRun = useMemo(
+    () => Object.values(agentRuns).some((run) => run.chatId === chatId && run.status === 'running'),
+    [agentRuns, chatId]
+  );
 
   const appendPendingThoughtToSteps = useCallback((steps: AgentStep[]): AgentStep[] => {
     const thought = streamingThoughtContentRef.current.trim();
@@ -593,6 +734,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
     const handleAgentRunUpdated = (run: AgentRun) => {
       setAgentRuns((current) => ({ ...current, [run.id]: run }));
+      if (run.status !== 'running') {
+        setIsStopping(false);
+      }
     };
 
     const handleStepSaved = (data: { step: AgentStep; allSteps: AgentStep[] }) => {
@@ -663,6 +807,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     socket.on('agent-complete', onAgentComplete);
     socket.on('error', onError);
     socket.on('agent-stopped', onAgentStopped);
+    socket.on('agent-cancelled', onAgentStopped);
     socket.on('timings', handleTimings);
     socket.on('tool-approval-required', handleToolApprovalRequired);
     socket.on('tool-approval-resolved', handleToolApprovalResolved);
@@ -684,6 +829,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       socket.off('agent-complete', onAgentComplete);
       socket.off('error', onError);
       socket.off('agent-stopped', onAgentStopped);
+      socket.off('agent-cancelled', onAgentStopped);
       socket.off('timings', handleTimings);
       socket.off('tool-approval-required', handleToolApprovalRequired);
       socket.off('tool-approval-resolved', handleToolApprovalResolved);
@@ -713,19 +859,35 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           isComplete: data.agentState?.isComplete,
         });
 
-        if (data.agentRuns) {
-          const runs = Array.isArray(data.agentRuns) ? data.agentRuns as AgentRun[] : [];
-          setAgentRuns(Object.fromEntries(runs.map((run) => [run.id, run])));
-        }
+        const runs = Array.isArray(data.agentRuns) ? data.agentRuns as AgentRun[] : [];
+        setAgentRuns(Object.fromEntries(runs.map((run) => [run.id, run])));
 
         if (data.messages) {
+          const loadedMessages = [...data.messages];
+          const agentMessageIds = new Set(
+            loadedMessages
+              .map((message) => getAgentRunIdFromMessage(message))
+              .filter(Boolean)
+          );
+          for (const run of runs) {
+            if (agentMessageIds.has(run.id)) continue;
+            loadedMessages.push({
+              id: generateUUID(),
+              role: 'assistant',
+              content: `__operator_agent_run__:${run.id}`,
+              model: run.model,
+              agentSteps: [],
+              agentRunId: run.id,
+            });
+          }
+
           // Check if there's an ongoing response BEFORE setting messages state
           let processingIndex = null;
           let agentStepsToRestore: AgentStep[] = [];
           
           if (data.agentState && data.agentState.steps && data.agentState.steps.length > 0 && !data.agentState.isComplete) {
             // Find the last user message that has agent steps (this is the message being processed)
-            const messages = data.messages;
+            const messages = loadedMessages;
             for (let i = messages.length - 1; i >= 0; i--) {
               if (messages[i].role === 'user' && messages[i].agentSteps && messages[i].agentSteps.length > 0) {
                 // Check if there's an assistant message after this user message
@@ -746,7 +908,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           }
           
           // Set all state at once to ensure consistency
-          setMessages(data.messages);
+          setMessages(loadedMessages);
           setPendingApproval(data.pendingApproval?.chatId === chatId ? data.pendingApproval : null);
           if (processingIndex !== null) {
             setIsProcessing(true);
@@ -1240,9 +1402,17 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   };
 
   const stopAgent = () => {
-    if (!socket || !isProcessing || isStopping) return;
+    if (!socket || (!isProcessing && !hasRunningAgentRun) || isStopping) return;
     setIsStopping(true);
     socket.emit('stop-agent', chatId);
+  };
+
+  const sendAgentSteering = (runId: string) => {
+    if (!socket) return;
+    const message = (agentSteeringDrafts[runId] || '').trim();
+    if (!message) return;
+    socket.emit('agent-user-message', { chatId, runId, message });
+    setAgentSteeringDrafts((current) => ({ ...current, [runId]: '' }));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1524,17 +1694,43 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       }
 
       if (step.type === 'observation' && pendingActionIndex !== null) {
+        if (step.content.trim().startsWith('User Message:')) {
+          entries.push({
+            id: `${entries.length}-user-message`,
+            type: 'system',
+            title: 'user message',
+            output: step.content,
+            status: 'completed',
+          });
+          continue;
+        }
         if (shouldHideObservation(step.content)) {
           entries.splice(pendingActionIndex, 1);
           pendingActionIndex = null;
           continue;
         }
+        const existingEntry = entries[pendingActionIndex];
+        const shouldKeepProgress = existingEntry.type === 'tool'
+          && ['write', 'edit', 'apply_patch'].includes(existingEntry.title);
         entries[pendingActionIndex] = {
-          ...entries[pendingActionIndex],
-          output: step.content,
+          ...existingEntry,
+          output: existingEntry.type === 'command' && existingEntry.output
+            ? existingEntry.output
+            : shouldKeepProgress && existingEntry.output
+              ? `${existingEntry.output.trimEnd()}\n\n${step.content}`
+              : step.content,
           status: 'completed',
         };
         pendingActionIndex = null;
+        continue;
+      }
+
+      if (step.type === 'tool_progress' && pendingActionIndex !== null) {
+        entries[pendingActionIndex] = {
+          ...entries[pendingActionIndex],
+          output: `${entries[pendingActionIndex].output || ''}${step.content}`,
+          status: 'running',
+        };
         continue;
       }
 
@@ -1580,6 +1776,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       .split('\n')
       .filter((line) => !line.includes('Warning: Permanently added') || !line.includes('known hosts'))
       .join('\n')
+      .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '')
+      .replace(/␛\[[0-?]*[ -/]*[@-~]/g, '')
       .trimEnd();
 
     const stdoutMatch = normalized.match(/(?:^|\n)STDOUT:\n([\s\S]*?)(?=\nSTDERR:\n|$)/);
@@ -1589,6 +1787,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
     if (stdout || stderr) {
       return [stdout, stderr].filter(Boolean).join('\n');
+    }
+
+    if (normalized.includes('--- STDOUT ---') || normalized.includes('--- STDERR ---')) {
+      const managedStdoutMatch = normalized.match(/(?:^|\n)--- STDOUT ---\n([\s\S]*?)(?=\n--- STDERR ---|$)/);
+      const managedStderrMatch = normalized.match(/(?:^|\n)--- STDERR ---\n([\s\S]*?)$/);
+      const managedStdout = managedStdoutMatch?.[1]?.trimEnd() || '';
+      const managedStderr = managedStderrMatch?.[1]?.trimEnd() || '';
+      return [managedStdout, managedStderr].filter(Boolean).join('\n').trimEnd();
     }
 
     if (normalized.includes('Status: still running in background terminal')) {
@@ -1623,15 +1829,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       .join('\n')
       .trimEnd();
     if (!normalized) return null;
-    const lines = normalized.split('\n');
-    const visible = lines.length > 240 ? lines.slice(-240) : lines;
-
-    return (
-      <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
-        {lines.length > visible.length ? `[showing last ${visible.length} of ${lines.length} lines]\n` : ''}
-        {visible.join('\n')}
-      </pre>
-    );
+    return <TerminalOutput normalized={normalized} type={type} />;
   };
 
   const renderTerminalEntry = (entry: AgentTerminalEntry) => {
@@ -1644,6 +1842,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           : entry.type === 'final'
             ? 'text-emerald-200'
             : 'text-zinc-300';
+    const visibleArgs = entry.args && entry.type !== 'command'
+      ? Object.entries(entry.args)
+        .filter(([key]) => !['content', 'patchText', 'oldString', 'newString'].includes(key))
+        .filter(([key]) => !(key === 'path' && entry.command?.includes(String(entry.args?.path))))
+      : [];
 
     return (
       <div key={entry.id} className="border-b border-white/5 px-4 py-3 last:border-b-0">
@@ -1657,12 +1860,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </span>
           )}
         </div>
-        {entry.args && entry.type !== 'command' && (
+        {visibleArgs.length > 0 && (
           <div className="mt-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 font-mono text-[11px] leading-5 text-zinc-500">
-            {Object.entries(entry.args)
-              .filter(([key]) => key !== 'content' && key !== 'patchText' && key !== 'oldString' && key !== 'newString')
+            {visibleArgs
               .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-              .join('\n') || entry.title}
+              .join('\n')}
           </div>
         )}
         {renderTerminalOutput(entry.output, entry.type)}
@@ -1704,7 +1906,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
         <div className="border-b border-white/5 px-4 py-3">
           <div className="font-mono text-xs text-zinc-500">task</div>
-          <div className="mt-1 text-sm leading-6 text-zinc-300">{run.prompt}</div>
+          <AgentTaskPreview prompt={run.prompt} />
         </div>
 
         <div>
@@ -1722,6 +1924,38 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </div>
           )}
         </div>
+
+        {run.status === 'running' && (
+          <div className="border-t border-white/10 bg-[#0d0d0f] px-4 py-3">
+            <div className="flex items-end gap-2">
+              <textarea
+                value={agentSteeringDrafts[run.id] || ''}
+                onChange={(event) => setAgentSteeringDrafts((current) => ({ ...current, [run.id]: event.target.value }))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    sendAgentSteering(run.id);
+                  }
+                }}
+                rows={1}
+                placeholder="Send a message to this running agent"
+                className="min-h-9 flex-1 resize-none rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-emerald-500/40"
+              />
+              <button
+                type="button"
+                onClick={() => sendAgentSteering(run.id)}
+                disabled={!(agentSteeringDrafts[run.id] || '').trim()}
+                className="flex size-9 items-center justify-center rounded-lg bg-emerald-500 text-black transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Send message to agent"
+                title="Send message to agent"
+              >
+                <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M12 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
 
         {run.error && (
           <div className="border-t border-red-500/20 bg-red-500/10 px-4 py-3 font-mono text-sm text-red-200">
@@ -2020,7 +2254,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     ));
   }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, streamingThoughtContent, 
       streamingContent, currentStepType, editingMessageIndex, editContent, showRetryDropdown,
-      copiedMessageId, highlightedMessage, isProcessing]);
+      copiedMessageId, highlightedMessage, isProcessing, agentSteeringDrafts]);
 
   const isEmptyState = messages.length === 0 && !isProcessing;
 
@@ -2181,10 +2415,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
           </svg>
         </button>
-        {isProcessing ? (
+        {isProcessing || hasRunningAgentRun ? (
           <button
             onClick={stopAgent}
-            className="flex size-9 items-center justify-center rounded-xl bg-red-500 text-white transition-all hover:bg-red-600"
+            disabled={isStopping}
+            className="flex size-9 items-center justify-center rounded-xl bg-red-500 text-white transition-all hover:bg-red-600 disabled:opacity-60"
             aria-label="Stop"
           >
             <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

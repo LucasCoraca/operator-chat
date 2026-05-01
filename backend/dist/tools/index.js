@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ToolRegistry = void 0;
 const browserClient_1 = require("../services/browserClient");
 const workspaceRuntime_1 = require("../services/workspaceRuntime");
+const agentMemoryService_1 = require("../services/agentMemoryService");
 const taskRepository_1 = require("../repositories/taskRepository");
 const schedule_1 = require("../services/schedule");
 const child_process_1 = require("child_process");
@@ -11,6 +12,36 @@ const browserClient = new browserClient_1.BrowserClient();
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 function quoteShellArg(value) {
     return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+function diffPreview(filePath, oldContent, newContent, maxLines = 220) {
+    const oldLines = oldContent.length > 0 ? oldContent.split('\n') : [];
+    const newLines = newContent.length > 0 ? newContent.split('\n') : [];
+    const max = Math.max(oldLines.length, newLines.length);
+    const lines = [];
+    let additions = 0;
+    let deletions = 0;
+    for (let index = 0; index < max; index++) {
+        if (oldLines[index] === newLines[index]) {
+            continue;
+        }
+        if (oldLines[index] !== undefined) {
+            deletions++;
+            if (lines.length < maxLines) {
+                lines.push(`${String(index + 1).padStart(6, ' ')} - ${oldLines[index]}`);
+            }
+        }
+        if (newLines[index] !== undefined) {
+            additions++;
+            if (lines.length < maxLines) {
+                lines.push(`${String(index + 1).padStart(6, ' ')} + ${newLines[index]}`);
+            }
+        }
+    }
+    const header = `• Edited ${filePath} (+${additions} -${deletions})`;
+    if (lines.length >= maxLines) {
+        lines.push('[diff preview truncated]');
+    }
+    return [header, ...lines].join('\n');
 }
 function isRemoteWorkspaceContext(context) {
     return Boolean(context.workspace?.ssh?.enabled);
@@ -21,13 +52,15 @@ class ToolRegistry {
     sandboxManager;
     workspaceRuntimeFactory;
     memoryManager;
+    agentMemoryService;
     mcpClientManager;
-    constructor(searxngClient, sandboxManager, memoryManager, mcpClientManager) {
+    constructor(searxngClient, sandboxManager, memoryManager, mcpClientManager, agentMemoryService) {
         this.tools = new Map();
         this.searxngClient = searxngClient;
         this.sandboxManager = sandboxManager;
         this.workspaceRuntimeFactory = new workspaceRuntime_1.WorkspaceRuntimeFactory(sandboxManager);
         this.memoryManager = memoryManager;
+        this.agentMemoryService = agentMemoryService;
         this.mcpClientManager = mcpClientManager;
         this.registerBuiltInTools();
         // Note: MCP tools are registered dynamically via registerMCPTools() when servers connect
@@ -35,10 +68,10 @@ class ToolRegistry {
     registerBuiltInTools() {
         this.tools.set('create_agent', {
             name: 'create_agent',
-            description: 'Start a separate coding agent run in the configured SSH remote environment. Use this when the user asks to create/start/run an agent. The agent live trace will appear in the originating chat. The model must choose the workspaceRoot for the agent.',
+            description: 'Start a separate coding agent run in the configured SSH remote environment. Use this when the user asks to create/start/run an agent. The agent live trace will appear in the originating chat. The model must choose the workspaceRoot for the agent. The prompt must include explicit Success Criteria, Non-goals, and Required Verification sections so the coding agent knows when to stop.',
             parameters: {
                 title: { type: 'string', description: 'Short title for the agent run' },
-                prompt: { type: 'string', description: 'Complete task instruction for the new agent' },
+                prompt: { type: 'string', description: 'Complete task instruction for the new agent. Include explicit Success Criteria, Non-goals, and Required Verification sections. Success Criteria should define the requested outcome; Non-goals should prevent scope drift; Required Verification should be bounded and practical.' },
                 workspaceRoot: { type: 'string', description: 'Absolute remote workspace path where the agent should run commands and edit files' },
             },
             policy: {
@@ -119,11 +152,32 @@ class ToolRegistry {
                     return 'Error: path is required';
                 }
                 try {
+                    const memory = context.agentMemory || this.agentMemoryService;
+                    if (memory && context.chatId) {
+                        const normalizedPath = (0, agentMemoryService_1.normalizeMemoryPath)(filePath, context.workspace);
+                        const fileState = await memory.get({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, 'file_state', `file:${normalizedPath}`);
+                        const fileSummary = await memory.get({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, 'file_summary', `file:${normalizedPath}`);
+                        const metadata = fileState?.metadata || {};
+                        const requestedOffset = args.offset !== undefined ? Number(args.offset) : 1;
+                        const requestedLimit = args.limit !== undefined ? Number(args.limit) : undefined;
+                        const requestedEnd = requestedLimit ? requestedOffset + requestedLimit - 1 : undefined;
+                        const coversRange = metadata.lineStart !== undefined && metadata.lineEnd !== undefined
+                            && Number(metadata.lineStart) <= requestedOffset
+                            && (!requestedEnd || Number(metadata.lineEnd) >= requestedEnd);
+                        const defaultRead = args.offset === undefined && args.limit === undefined;
+                        if (fileSummary && (defaultRead || coversRange) && metadata.stale !== true) {
+                            return `Memory hit for ${normalizedPath}. This file is already represented in backend-managed memory and has not changed since the last known update.\n\n${fileSummary.content}\n\nUse read with a specific offset/limit only if you need exact lines not covered by this memory, or use grep for targeted lookup.`;
+                        }
+                    }
                     const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
-                    return await runtime.readFile(filePath, {
+                    const result = await runtime.readFile(filePath, {
                         offset: args.offset !== undefined ? Number(args.offset) : undefined,
                         limit: args.limit !== undefined ? Number(args.limit) : undefined,
                     });
+                    if (context.agentMemory && context.chatId) {
+                        await context.agentMemory.recordFileRead({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, filePath, result, args.offset !== undefined ? Number(args.offset) : undefined, args.limit !== undefined ? Number(args.limit) : undefined);
+                    }
+                    return result;
                 }
                 catch (error) {
                     return `Error reading workspace file: ${error instanceof Error ? error.message : String(error)}`;
@@ -200,6 +254,113 @@ class ToolRegistry {
                 }
             },
         });
+        this.tools.set('memory_get', {
+            name: 'memory_get',
+            internal: true,
+            description: 'Read backend-managed coding-agent memory for the active SSH workspace. Use this before rereading files or when resuming context.',
+            parameters: {
+                kind: { type: 'string', description: 'Optional memory kind filter such as active_context, progress, file_summary, command, error.', required: false },
+                query: { type: 'string', description: 'Optional text search across memory content and keys.', required: false },
+                limit: { type: 'number', description: 'Maximum memories to return. Defaults to 30.', required: false },
+            },
+            policy: {
+                requiresApproval: false,
+                supportsAutoApprove: true,
+                capabilities: ['memory', 'remote'],
+                sandboxPolicy: 'workspace_runtime',
+                riskLevel: 'low',
+            },
+            execute: async (args, context) => {
+                const memory = context.agentMemory || this.agentMemoryService;
+                if (!memory || !context.chatId) {
+                    return 'Memory is not available in this context.';
+                }
+                const scope = { chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId };
+                const limit = args.limit !== undefined ? Number(args.limit) : 30;
+                const records = args.query
+                    ? await memory.search(scope, String(args.query), limit)
+                    : await memory.list(scope, args.kind ? [String(args.kind)] : undefined, limit);
+                if (records.length === 0) {
+                    return 'No matching memories.';
+                }
+                return records.map((record) => (`- ${record.kind} ${record.memory_key} (${record.source}/${record.confidence})\n${record.content}`)).join('\n\n');
+            },
+        });
+        this.tools.set('memory_set', {
+            name: 'memory_set',
+            internal: true,
+            description: 'Store or update one backend-managed agent memory item. Use for decisions, active context, todos, progress, and file summaries.',
+            parameters: {
+                kind: { type: 'string', description: 'Memory kind: active_context, progress, todo, decision, file_summary, command, error, test_result.' },
+                key: { type: 'string', description: 'Stable key for the memory, such as current, todo:auth, decision:state-management, file:src/App.tsx.' },
+                content: { type: 'string', description: 'Concise memory content to preserve for future agent turns.' },
+            },
+            policy: {
+                requiresApproval: false,
+                supportsAutoApprove: true,
+                capabilities: ['memory', 'remote'],
+                sandboxPolicy: 'workspace_runtime',
+                riskLevel: 'low',
+            },
+            execute: async (args, context) => {
+                const memory = context.agentMemory || this.agentMemoryService;
+                if (!memory || !context.chatId) {
+                    return 'Memory is not available in this context.';
+                }
+                const kind = String(args.kind || '');
+                const key = String(args.key || '').trim();
+                const content = String(args.content || '').trim();
+                if (!kind || !key || !content) {
+                    return 'Error: kind, key, and content are required.';
+                }
+                await memory.upsert({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, { kind, key, content, source: 'agent', confidence: 'agent_claim' });
+                return `Memory updated: ${kind} ${key}`;
+            },
+        });
+        this.tools.set('memory_checkpoint', {
+            name: 'memory_checkpoint',
+            internal: true,
+            description: 'Save a structured progress checkpoint into backend-managed memory. Use after major milestones, before compaction, and before final answer.',
+            parameters: {
+                activeContext: { type: 'string', description: 'Current state of the task and what is being worked on.' },
+                progress: { type: 'string', description: 'Completed work, preferably concise bullet text.' },
+                nextSteps: { type: 'string', description: 'Remaining concrete next steps.' },
+                decisions: { type: 'string', description: 'Important decisions or architecture choices.', required: false },
+            },
+            policy: {
+                requiresApproval: false,
+                supportsAutoApprove: true,
+                capabilities: ['memory', 'remote'],
+                sandboxPolicy: 'workspace_runtime',
+                riskLevel: 'low',
+            },
+            execute: async (args, context) => {
+                const memory = context.agentMemory || this.agentMemoryService;
+                if (!memory || !context.chatId) {
+                    return 'Memory is not available in this context.';
+                }
+                const scope = { chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId };
+                const updates = [
+                    ['active_context', 'current', args.activeContext],
+                    ['progress', 'current', args.progress],
+                    ['todo', 'next_steps', args.nextSteps],
+                    ['decision', 'current', args.decisions],
+                ];
+                for (const [kind, key, content] of updates) {
+                    const text = String(content || '').trim();
+                    if (!text)
+                        continue;
+                    await memory.upsert(scope, {
+                        kind: kind,
+                        key,
+                        content: text,
+                        source: 'agent',
+                        confidence: 'agent_claim',
+                    });
+                }
+                return 'Memory checkpoint saved.';
+            },
+        });
         this.tools.set('bash', {
             name: 'bash',
             internal: true,
@@ -224,10 +385,33 @@ class ToolRegistry {
                 }
                 try {
                     const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
+                    let streamMode = 'stdout';
                     const result = await runtime.exec({
                         command,
                         workdir: args.workdir,
                         timeoutMs: args.timeoutMs !== undefined ? Number(args.timeoutMs) : undefined,
+                        onStdout: (chunk) => {
+                            let text = chunk;
+                            if (text.includes('__OPERATOR_CHAT_STDERR_CHUNK__') || text.includes('__OPERATOR_CHAT_STDOUT_CHUNK__')) {
+                                const parts = text.split(/(__OPERATOR_CHAT_STDERR_CHUNK__|__OPERATOR_CHAT_STDOUT_CHUNK__)/);
+                                for (const part of parts) {
+                                    if (!part)
+                                        continue;
+                                    if (part === '__OPERATOR_CHAT_STDERR_CHUNK__') {
+                                        streamMode = 'stderr';
+                                        continue;
+                                    }
+                                    if (part === '__OPERATOR_CHAT_STDOUT_CHUNK__') {
+                                        streamMode = 'stdout';
+                                        continue;
+                                    }
+                                    context.emitToolProgress?.(streamMode === 'stderr' ? `[stderr]\n${part}` : part);
+                                }
+                                return;
+                            }
+                            context.emitToolProgress?.(streamMode === 'stderr' ? `[stderr]\n${text}` : text);
+                        },
+                        onStderr: (chunk) => context.emitToolProgress?.(`[ssh stderr]\n${chunk}`),
                     });
                     const sections = [
                         `Command: ${command}`,
@@ -253,6 +437,14 @@ class ToolRegistry {
                     }
                     if (!result.stdout.trim() && !result.stderr.trim()) {
                         sections.push('\n(no output)');
+                    }
+                    if (context.agentMemory && context.chatId) {
+                        await context.agentMemory.recordCommand({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, command, {
+                            exitCode: result.exitCode,
+                            stdout: result.stdout,
+                            stderr: result.stderr,
+                            durationMs: result.durationMs,
+                        });
                     }
                     return sections.join('\n');
                 }
@@ -345,7 +537,7 @@ class ToolRegistry {
         this.tools.set('write', {
             name: 'write',
             internal: true,
-            description: 'Create or overwrite a text file in the active workspace. In SSH agent mode this writes to the configured remote host. Use edit for precise changes to existing files.',
+            description: 'Create or overwrite a text file in the active workspace. In SSH agent mode this writes to the configured remote host. Use edit for precise changes to existing files. Identical rewrites already tracked in backend memory are skipped.',
             parameters: {
                 path: { type: 'string', description: 'File path relative to the active workspace root' },
                 content: { type: 'string', description: 'Complete file content to write' },
@@ -367,7 +559,23 @@ class ToolRegistry {
                 }
                 try {
                     const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
-                    return await runtime.writeFile(filePath, String(args.content));
+                    const content = String(args.content);
+                    const memory = context.agentMemory || this.agentMemoryService;
+                    if (memory && context.chatId) {
+                        const normalizedPath = (0, agentMemoryService_1.normalizeMemoryPath)(filePath, context.workspace);
+                        const proposedHash = (0, agentMemoryService_1.agentMemoryContentHash)(content);
+                        const fileState = await memory.get({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, 'file_state', `file:${normalizedPath}`);
+                        const metadata = fileState?.metadata || {};
+                        if (metadata.stale !== true && metadata.contentHash === proposedHash) {
+                            return `Duplicate write skipped for ${normalizedPath}. Backend memory already has identical latest content (${proposedHash.slice(0, 12)}). Do not rewrite this file; continue with another file, run verification, or use memory_get if you need to recall what was written.`;
+                        }
+                    }
+                    context.emitToolProgress?.(`${diffPreview(filePath, '', content)}\n`);
+                    const result = await runtime.writeFile(filePath, content);
+                    if (context.agentMemory && context.chatId) {
+                        await context.agentMemory.recordFileWrite({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, filePath, content, 'write');
+                    }
+                    return result;
                 }
                 catch (error) {
                     return `Error writing workspace file: ${error instanceof Error ? error.message : String(error)}`;
@@ -401,7 +609,13 @@ class ToolRegistry {
                 }
                 try {
                     const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
-                    return await runtime.editFile(filePath, String(args.oldString), String(args.newString), Boolean(args.replaceAll));
+                    context.emitToolProgress?.(`${diffPreview(filePath, String(args.oldString), String(args.newString))}\n`);
+                    const result = await runtime.editFile(filePath, String(args.oldString), String(args.newString), Boolean(args.replaceAll));
+                    if (context.agentMemory && context.chatId) {
+                        const latest = await runtime.readFile(filePath, { offset: 1, limit: 1000 });
+                        await context.agentMemory.recordFileWrite({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, filePath, latest, 'edit');
+                    }
+                    return result;
                 }
                 catch (error) {
                     return `Error editing workspace file: ${error instanceof Error ? error.message : String(error)}`;
@@ -429,7 +643,15 @@ class ToolRegistry {
                 }
                 try {
                     const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
-                    return await runtime.applyPatch(patchText);
+                    context.emitToolProgress?.(`Applying patch...\n${patchText.slice(0, 20000)}${patchText.length > 20000 ? '\n[patch preview truncated]' : ''}\n`);
+                    const result = await runtime.applyPatch(patchText);
+                    if (context.agentMemory && context.chatId) {
+                        const paths = context.agentMemory.extractPatchPaths(patchText);
+                        for (const filePath of paths) {
+                            await context.agentMemory.recordFilePatch({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, filePath, patchText);
+                        }
+                    }
+                    return result;
                 }
                 catch (error) {
                     return `Error applying workspace patch: ${error instanceof Error ? error.message : String(error)}`;

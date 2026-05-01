@@ -103,7 +103,7 @@ export class ChatRepository {
     return chat;
   }
 
-  async update(id: string, updates: Partial<Chat>): Promise<Chat | null> {
+  async update(id: string, updates: Partial<Chat>, options: { touchUpdatedAt?: boolean } = {}): Promise<Chat | null> {
     const fields: string[] = [];
     const values: any[] = [];
 
@@ -126,8 +126,10 @@ export class ChatRepository {
 
     if (fields.length === 0) return this.findById(id);
 
-    fields.push('updated_at = ?');
-    values.push(toMysqlDateTime());
+    if (options.touchUpdatedAt !== false) {
+      fields.push('updated_at = ?');
+      values.push(toMysqlDateTime());
+    }
     values.push(id);
 
     await execute(

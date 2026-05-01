@@ -104,6 +104,99 @@ export class LlamaClient {
     }
   }
 
+  private getNativeBaseUrl(): string {
+    return this.config.baseUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
+  }
+
+  async countTokens(content: string): Promise<number> {
+    if (!content) {
+      return 0;
+    }
+
+    const nativeBaseUrl = this.getNativeBaseUrl();
+    const candidates = [
+      `${nativeBaseUrl}/tokenize`,
+      `${nativeBaseUrl}/v1/tokenize`,
+    ];
+
+    for (const url of candidates) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.config.apiKey ? { Authorization: `Bearer ${this.config.apiKey}` } : {}),
+          },
+          body: JSON.stringify({
+            content,
+            add_special: false,
+            parse_special: true,
+          }),
+        });
+
+        if (!response.ok) {
+          if (response.status === 404) {
+            continue;
+          }
+          throw new Error(`Tokenize failed with HTTP ${response.status}`);
+        }
+
+        const data = await response.json() as { tokens?: unknown[] };
+        if (Array.isArray(data.tokens)) {
+          return data.tokens.length;
+        }
+      } catch (error) {
+        if (url !== candidates[candidates.length - 1]) {
+          continue;
+        }
+        console.warn('LLAMA CLIENT: tokenize failed, using character estimate:', error);
+      }
+    }
+
+    try {
+      const response = await fetch(`${nativeBaseUrl}/completion`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.config.apiKey ? { Authorization: `Bearer ${this.config.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          prompt: content,
+          n_predict: 0,
+          cache_prompt: false,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json() as { tokens_evaluated?: number; prompt_n?: number };
+        if (typeof data.tokens_evaluated === 'number') {
+          return data.tokens_evaluated;
+        }
+        if (typeof data.prompt_n === 'number') {
+          return data.prompt_n;
+        }
+      }
+    } catch (error) {
+      console.warn('LLAMA CLIENT: completion token estimate failed, using character estimate:', error);
+    }
+
+    return Math.ceil(content.length / 4);
+  }
+
+  async countChatTokens(messages: ChatMessage[]): Promise<number> {
+    const serialized = messages
+      .map((message) => {
+        const toolCalls = message.tool_calls?.length
+          ? `\ntool_calls: ${JSON.stringify(message.tool_calls)}`
+          : '';
+        const toolCallId = message.tool_call_id ? `\ntool_call_id: ${message.tool_call_id}` : '';
+        return `<|${message.role}|>\n${message.content}${toolCalls}${toolCallId}`;
+      })
+      .join('\n');
+
+    return this.countTokens(serialized);
+  }
+
   async chat(
     messages: ChatMessage[], 
     options?: { 
