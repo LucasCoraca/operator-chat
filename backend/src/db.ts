@@ -20,6 +20,50 @@ const dbConfig = {
 // Create connection pool
 const pool = mysql.createPool(dbConfig);
 
+async function ignoreDuplicateMigration(error: unknown): Promise<void> {
+  const code = (error as any)?.code;
+  if (code === 'ER_DUP_FIELDNAME' || code === 'ER_MULTIPLE_PRI_KEY' || code === 'ER_DUP_KEYNAME') {
+    return;
+  }
+  throw error;
+}
+
+async function migrateSettingsToUserScope(): Promise<void> {
+  try {
+    await pool.execute(`ALTER TABLE settings ADD COLUMN user_id VARCHAR(36) NOT NULL DEFAULT '__global__' FIRST`);
+  } catch (error) {
+    await ignoreDuplicateMigration(error);
+  }
+
+  try {
+    await pool.execute('ALTER TABLE settings DROP PRIMARY KEY');
+  } catch (error) {
+    const code = (error as any)?.code;
+    if (code !== 'ER_CANT_DROP_FIELD_OR_KEY') {
+      throw error;
+    }
+  }
+
+  try {
+    await pool.execute('ALTER TABLE settings ADD PRIMARY KEY (user_id, `key`)');
+  } catch (error) {
+    await ignoreDuplicateMigration(error);
+  }
+
+  try {
+    await pool.execute('CREATE INDEX idx_settings_user_id ON settings (user_id)');
+  } catch (error) {
+    await ignoreDuplicateMigration(error);
+  }
+
+  await pool.execute(`
+    INSERT IGNORE INTO settings (user_id, \`key\`, value)
+    SELECT users.id, settings.\`key\`, settings.value
+    FROM users
+    JOIN settings ON settings.user_id = '__global__'
+  `);
+}
+
 // Test database connection
 export async function testConnection(): Promise<boolean> {
   try {
@@ -117,11 +161,15 @@ export async function initializeDatabase(): Promise<void> {
     // Create settings table (key-value store)
     await pool.execute(`
       CREATE TABLE IF NOT EXISTS settings (
+        user_id VARCHAR(36) NOT NULL DEFAULT '__global__',
         \`key\` VARCHAR(255) PRIMARY KEY,
         value JSON NOT NULL,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_settings_user_id (user_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    await migrateSettingsToUserScope();
 
     // Create scheduled tasks table
     await pool.execute(`

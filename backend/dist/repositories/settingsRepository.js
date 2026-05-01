@@ -3,8 +3,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.settingsRepository = exports.SettingsRepository = void 0;
 const db_1 = require("../db");
 class SettingsRepository {
-    async get(key) {
-        const setting = await (0, db_1.queryOne)('SELECT * FROM settings WHERE `key` = ?', [key]);
+    normalizeUserId(userId) {
+        return userId || '__global__';
+    }
+    async get(key, userId) {
+        const setting = await (0, db_1.queryOne)('SELECT * FROM settings WHERE user_id = ? AND `key` = ?', [this.normalizeUserId(userId), key]);
         if (!setting)
             return null;
         try {
@@ -14,17 +17,17 @@ class SettingsRepository {
             return setting.value;
         }
     }
-    async set(key, value) {
+    async set(key, value, userId) {
         const jsonValue = JSON.stringify(value);
-        await (0, db_1.execute)(`INSERT INTO settings (\`key\`, value) VALUES (?, ?)
-       ON DUPLICATE KEY UPDATE value = ?, updated_at = CURRENT_TIMESTAMP`, [key, jsonValue, jsonValue]);
+        await (0, db_1.execute)(`INSERT INTO settings (user_id, \`key\`, value) VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE value = ?, updated_at = CURRENT_TIMESTAMP`, [this.normalizeUserId(userId), key, jsonValue, jsonValue]);
     }
-    async delete(key) {
-        const result = await (0, db_1.execute)('DELETE FROM settings WHERE `key` = ?', [key]);
+    async delete(key, userId) {
+        const result = await (0, db_1.execute)('DELETE FROM settings WHERE user_id = ? AND `key` = ?', [this.normalizeUserId(userId), key]);
         return result.affectedRows > 0;
     }
-    async getAll() {
-        const settings = await (0, db_1.query)('SELECT * FROM settings');
+    async getAll(userId) {
+        const settings = await (0, db_1.query)('SELECT * FROM settings WHERE user_id = ?', [this.normalizeUserId(userId)]);
         const result = {};
         for (const setting of settings) {
             try {
@@ -38,8 +41,8 @@ class SettingsRepository {
         }
         return result;
     }
-    async exists(key) {
-        const setting = await (0, db_1.queryOne)('SELECT COUNT(*) as count FROM settings WHERE `key` = ?', [key]);
+    async exists(key, userId) {
+        const setting = await (0, db_1.queryOne)('SELECT COUNT(*) as count FROM settings WHERE user_id = ? AND `key` = ?', [this.normalizeUserId(userId), key]);
         return (setting?.count || 0) > 0;
     }
     // Convenience methods for common settings
@@ -64,25 +67,25 @@ class SettingsRepository {
     async setSearxngConfig(config) {
         await this.set('searxng', config);
     }
-    async getUiSettings() {
-        return this.get('ui') || {
+    async getUiSettings(userId) {
+        return this.get('ui', userId) || {
             showStats: false,
             selectedPersonality: 'professional',
             defaultToolPreferences: {},
         };
     }
-    async setUiSettings(settings) {
-        await this.set('ui', settings);
+    async setUiSettings(settings, userId) {
+        await this.set('ui', settings, userId);
     }
-    async getMcpServers() {
-        const servers = await this.get('mcpServers');
+    async getMcpServers(userId) {
+        const servers = await this.get('mcpServers', userId);
         return servers || {};
     }
-    async setMcpServers(servers) {
-        await this.set('mcpServers', servers);
+    async setMcpServers(servers, userId) {
+        await this.set('mcpServers', servers, userId);
     }
-    async getRemoteWorkspace() {
-        return this.get('remoteWorkspace') || {
+    async getRemoteWorkspace(userId) {
+        return this.get('remoteWorkspace', userId) || {
             enabled: false,
             host: '',
             port: 22,
@@ -98,8 +101,8 @@ class SettingsRepository {
             autoCompactThreshold: 0.82,
         };
     }
-    async setRemoteWorkspace(config) {
-        await this.set('remoteWorkspace', config);
+    async setRemoteWorkspace(config, userId) {
+        await this.set('remoteWorkspace', config, userId);
     }
 }
 exports.SettingsRepository = SettingsRepository;

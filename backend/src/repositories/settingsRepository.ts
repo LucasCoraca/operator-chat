@@ -1,14 +1,22 @@
 import { query, queryOne, execute } from '../db';
 
 export interface Setting {
+  user_id: string;
   key: string;
   value: any;
   updated_at: Date;
 }
 
 export class SettingsRepository {
-  async get<T>(key: string): Promise<T | null> {
-    const setting = await queryOne<Setting>('SELECT * FROM settings WHERE `key` = ?', [key]);
+  private normalizeUserId(userId?: string): string {
+    return userId || '__global__';
+  }
+
+  async get<T>(key: string, userId?: string): Promise<T | null> {
+    const setting = await queryOne<Setting>(
+      'SELECT * FROM settings WHERE user_id = ? AND `key` = ?',
+      [this.normalizeUserId(userId), key]
+    );
     if (!setting) return null;
     
     try {
@@ -18,22 +26,22 @@ export class SettingsRepository {
     }
   }
 
-  async set(key: string, value: any): Promise<void> {
+  async set(key: string, value: any, userId?: string): Promise<void> {
     const jsonValue = JSON.stringify(value);
     await execute(
-      `INSERT INTO settings (\`key\`, value) VALUES (?, ?)
+      `INSERT INTO settings (user_id, \`key\`, value) VALUES (?, ?, ?)
        ON DUPLICATE KEY UPDATE value = ?, updated_at = CURRENT_TIMESTAMP`,
-      [key, jsonValue, jsonValue]
+      [this.normalizeUserId(userId), key, jsonValue, jsonValue]
     );
   }
 
-  async delete(key: string): Promise<boolean> {
-    const result = await execute('DELETE FROM settings WHERE `key` = ?', [key]);
+  async delete(key: string, userId?: string): Promise<boolean> {
+    const result = await execute('DELETE FROM settings WHERE user_id = ? AND `key` = ?', [this.normalizeUserId(userId), key]);
     return result.affectedRows > 0;
   }
 
-  async getAll(): Promise<Record<string, any>> {
-    const settings = await query<Setting>('SELECT * FROM settings');
+  async getAll(userId?: string): Promise<Record<string, any>> {
+    const settings = await query<Setting>('SELECT * FROM settings WHERE user_id = ?', [this.normalizeUserId(userId)]);
     const result: Record<string, any> = {};
     
     for (const setting of settings) {
@@ -49,10 +57,10 @@ export class SettingsRepository {
     return result;
   }
 
-  async exists(key: string): Promise<boolean> {
+  async exists(key: string, userId?: string): Promise<boolean> {
     const setting = await queryOne<{ count: number }>(
-      'SELECT COUNT(*) as count FROM settings WHERE `key` = ?',
-      [key]
+      'SELECT COUNT(*) as count FROM settings WHERE user_id = ? AND `key` = ?',
+      [this.normalizeUserId(userId), key]
     );
     return (setting?.count || 0) > 0;
   }
@@ -83,29 +91,29 @@ export class SettingsRepository {
     await this.set('searxng', config);
   }
 
-  async getUiSettings(): Promise<any> {
-    return this.get('ui') || {
+  async getUiSettings(userId?: string): Promise<any> {
+    return this.get('ui', userId) || {
       showStats: false,
       selectedPersonality: 'professional',
       defaultToolPreferences: {},
     };
   }
 
-  async setUiSettings(settings: any): Promise<void> {
-    await this.set('ui', settings);
+  async setUiSettings(settings: any, userId?: string): Promise<void> {
+    await this.set('ui', settings, userId);
   }
 
-  async getMcpServers(): Promise<Record<string, any>> {
-    const servers = await this.get<Record<string, any>>('mcpServers');
+  async getMcpServers(userId?: string): Promise<Record<string, any>> {
+    const servers = await this.get<Record<string, any>>('mcpServers', userId);
     return servers || {};
   }
 
-  async setMcpServers(servers: Record<string, any>): Promise<void> {
-    await this.set('mcpServers', servers);
+  async setMcpServers(servers: Record<string, any>, userId?: string): Promise<void> {
+    await this.set('mcpServers', servers, userId);
   }
 
-  async getRemoteWorkspace(): Promise<any> {
-    return this.get('remoteWorkspace') || {
+  async getRemoteWorkspace(userId?: string): Promise<any> {
+    return this.get('remoteWorkspace', userId) || {
       enabled: false,
       host: '',
       port: 22,
@@ -122,8 +130,8 @@ export class SettingsRepository {
     };
   }
 
-  async setRemoteWorkspace(config: any): Promise<void> {
-    await this.set('remoteWorkspace', config);
+  async setRemoteWorkspace(config: any, userId?: string): Promise<void> {
+    await this.set('remoteWorkspace', config, userId);
   }
 }
 

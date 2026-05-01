@@ -137,6 +137,22 @@ async function loadMCPServers() {
         }
     }
 }
+async function getUserSettings(userId) {
+    const uiSettings = await repositories_1.settingsRepository.getUiSettings(userId);
+    const mcpServersSettings = await repositories_1.settingsRepository.getMcpServers(userId);
+    const remoteWorkspaceSettings = await repositories_1.settingsRepository.getRemoteWorkspace(userId);
+    const settings = {
+        ...defaultSettings,
+        ui: {
+            ...defaultSettings.ui,
+            ...(uiSettings || {}),
+        },
+        mcpServers: mcpServersSettings || defaultSettings.mcpServers,
+        remoteWorkspace: normalizeRemoteWorkspaceSettings(remoteWorkspaceSettings),
+    };
+    settings.ui.defaultToolPreferences = toolRegistry.mergeWithDefaultPreferences(settings.ui.defaultToolPreferences);
+    return settings;
+}
 // Initialize database and load settings
 async function initializeApp() {
     try {
@@ -149,17 +165,8 @@ async function initializeApp() {
         // Initialize database schema
         await (0, db_1.initializeDatabase)();
         console.log('Database initialized successfully');
-        // Load UI and MCP settings from database (llama/searxng come from env vars)
-        const uiSettings = await repositories_1.settingsRepository.getUiSettings();
-        const mcpServersSettings = await repositories_1.settingsRepository.getMcpServers();
-        const remoteWorkspaceSettings = await repositories_1.settingsRepository.getRemoteWorkspace();
-        loadedSettings = {
-            ...defaultSettings,
-            ui: uiSettings || defaultSettings.ui,
-            mcpServers: mcpServersSettings || defaultSettings.mcpServers,
-            remoteWorkspace: normalizeRemoteWorkspaceSettings(remoteWorkspaceSettings),
-        };
-        loadedSettings.ui.defaultToolPreferences = toolRegistry.mergeWithDefaultPreferences(loadedSettings.ui.defaultToolPreferences);
+        // Llama/SearXNG are server-level env config. UI and remote workspace settings are loaded per user.
+        loadedSettings = defaultSettings;
         // Hydrate in-memory chat sessions from the database only after schema setup succeeds.
         await loadChats();
         // Load MCP servers
@@ -176,8 +183,8 @@ async function initializeApp() {
 }
 // Initialize app on startup
 initializeApp().catch(console.error);
-function normalizeToolPreferences(preferences) {
-    return restrictInternalAgentTools(toolRegistry.mergeWithDefaultPreferences(preferences, loadedSettings.ui.defaultToolPreferences));
+function normalizeToolPreferences(preferences, defaultPreferences) {
+    return restrictInternalAgentTools(toolRegistry.mergeWithDefaultPreferences(preferences, defaultPreferences || defaultSettings.ui.defaultToolPreferences));
 }
 const AGENT_INTERNAL_TOOL_NAMES = new Set([
     'list',
@@ -204,9 +211,9 @@ function restrictInternalAgentTools(preferences) {
     }
     return next;
 }
-function buildSpawnedAgentToolPreferences(base) {
+function buildSpawnedAgentToolPreferences(base, remoteWorkspace) {
     const preferences = toolRegistry.mergeWithDefaultPreferences(base);
-    const toolApprovals = loadedSettings.remoteWorkspace.toolApprovals || {};
+    const toolApprovals = remoteWorkspace.toolApprovals || {};
     for (const [toolName, preference] of Object.entries(preferences)) {
         const enabled = AGENT_INTERNAL_TOOL_NAMES.has(toolName);
         preferences[toolName] = {
@@ -282,26 +289,26 @@ function normalizeRemoteWorkspaceSettings(input) {
         autoCompactThreshold: Number.isFinite(autoCompactThreshold) && autoCompactThreshold > 0 && autoCompactThreshold <= 1 ? autoCompactThreshold : defaultSettings.remoteWorkspace.autoCompactThreshold,
     };
 }
-function getConfiguredWorkspaceConfig() {
-    if (!loadedSettings.remoteWorkspace.enabled) {
+function getConfiguredWorkspaceConfig(remoteWorkspace) {
+    if (!remoteWorkspace.enabled) {
         return undefined;
     }
     return {
         type: 'ssh_remote',
         ssh: {
             enabled: true,
-            host: loadedSettings.remoteWorkspace.host,
-            username: loadedSettings.remoteWorkspace.username,
-            root: loadedSettings.remoteWorkspace.root,
-            port: loadedSettings.remoteWorkspace.port,
-            privateKey: loadedSettings.remoteWorkspace.privateKey,
-            privateKeyPath: loadedSettings.remoteWorkspace.privateKeyPath,
-            strictHostKeyChecking: loadedSettings.remoteWorkspace.strictHostKeyChecking,
+            host: remoteWorkspace.host,
+            username: remoteWorkspace.username,
+            root: remoteWorkspace.root,
+            port: remoteWorkspace.port,
+            privateKey: remoteWorkspace.privateKey,
+            privateKeyPath: remoteWorkspace.privateKeyPath,
+            strictHostKeyChecking: remoteWorkspace.strictHostKeyChecking,
         },
     };
 }
-function getWorkspaceConfigForRoot(workspaceRoot) {
-    const configured = getConfiguredWorkspaceConfig();
+function getWorkspaceConfigForRoot(workspaceRoot, remoteWorkspace) {
+    const configured = getConfiguredWorkspaceConfig(remoteWorkspace);
     if (!configured?.ssh) {
         return undefined;
     }
@@ -729,12 +736,14 @@ function parseWorkspaceListOutput(output, basePath) {
     })
         .filter((item) => item.path && item.path !== '.');
 }
-async function getSelectedPersonality() {
-    const selectedPersonalityId = loadedSettings.ui.selectedPersonality;
+async function getSelectedPersonality(userId, uiSettings) {
+    const selectedPersonalityId = uiSettings?.selectedPersonality || defaultSettings.ui.selectedPersonality;
     if (!selectedPersonalityId)
         return null;
     const dbPersonality = await repositories_1.personalityRepository.findById(selectedPersonalityId);
     if (!dbPersonality)
+        return null;
+    if (dbPersonality.user_id && dbPersonality.user_id !== userId)
         return null;
     return {
         id: dbPersonality.id,
@@ -921,7 +930,8 @@ async function executeScheduledTask(task, force = false) {
     io.to(task.user_id).emit('task-run-started', { taskId: task.id, runId: run.id, chatId: session.id });
     await repositories_1.taskRepository.updateRun(run.id, { status: 'running', started_at: new Date() });
     await repositories_1.taskRepository.update(task.id, { next_run_at: null });
-    const responseModel = task.model || loadedSettings.ui.selectedModel || llamaConfig.model;
+    const userSettings = await getUserSettings(task.user_id);
+    const responseModel = task.model || userSettings.ui.selectedModel || llamaConfig.model;
     if (!responseModel) {
         const errorMessage = 'No model is configured for scheduled task execution';
         await repositories_1.taskRepository.updateRun(run.id, { status: 'failed', completed_at: new Date(), error: errorMessage });
@@ -933,14 +943,14 @@ async function executeScheduledTask(task, force = false) {
     const maxIterationsMap = { low: 3, medium: 7, high: 15 };
     const maxIterations = maxIterationsMap[task.reasoning_effort || 'medium'] || 7;
     const scheduledMessage = `Scheduled task: ${task.title}\n\n${task.prompt}`;
-    session.toolPreferences = normalizeToolPreferences(task.tool_preferences || session.toolPreferences);
+    session.toolPreferences = normalizeToolPreferences(task.tool_preferences || session.toolPreferences, userSettings.ui.defaultToolPreferences);
     session.approvalMode = task.approval_mode || { alwaysApprove: false };
     session.messages.push({ id: crypto_1.default.randomUUID(), role: 'user', content: scheduledMessage, agentSteps: [] });
     session.updatedAt = new Date().toISOString();
     io.to(session.id).emit('message', { role: 'user', content: scheduledMessage });
     emitChatUpdated(session);
     const conversationHistory = buildChatConversationHistory(session, true);
-    const selectedPersonality = await getSelectedPersonality();
+    const selectedPersonality = await getSelectedPersonality(task.user_id, userSettings.ui);
     let approvalBlocked = false;
     const agent = new ReActAgent_1.ReActAgent(llamaClient, toolRegistry, maxIterations, {
         onStep: (step) => {
@@ -982,7 +992,7 @@ async function executeScheduledTask(task, force = false) {
     session.currentAgent = agent;
     try {
         const userMemories = (await memoryManager.getMemories(task.user_id)).map(m => m.content);
-        const result = await agent.run(session.id, scheduledMessage, session.sandboxId, task.user_id, conversationHistory, userMemories, session.toolPreferences, session.approvalMode, getConfiguredWorkspaceConfig());
+        const result = await agent.run(session.id, scheduledMessage, session.sandboxId, task.user_id, conversationHistory, userMemories, session.toolPreferences, session.approvalMode, getConfiguredWorkspaceConfig(userSettings.remoteWorkspace));
         session.agentState = {
             steps: result.steps,
             isComplete: result.isComplete,
@@ -1250,11 +1260,12 @@ function startTaskScheduler() {
     pollScheduledTasks().catch(console.error);
 }
 async function startChatAgentRun(session, userId, request, model, language, sourceSocketChatId) {
-    const workspace = getWorkspaceConfigForRoot(request.workspaceRoot);
+    const userSettings = await getUserSettings(userId);
+    const workspace = getWorkspaceConfigForRoot(request.workspaceRoot, userSettings.remoteWorkspace);
     if (!workspace?.ssh?.enabled) {
         throw new Error('Remote workspace is not configured in Settings.');
     }
-    const agentModel = loadedSettings.remoteWorkspace.agentModel || model;
+    const agentModel = userSettings.remoteWorkspace.agentModel || model;
     const agentPrompt = ensureCodingAgentSuccessContract(request.prompt);
     const now = new Date().toISOString();
     const run = {
@@ -1289,7 +1300,7 @@ async function startChatAgentRun(session, userId, request, model, language, sour
         agentRunId: run.id,
     });
     io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-    const agentToolPreferences = buildSpawnedAgentToolPreferences(session.toolPreferences);
+    const agentToolPreferences = buildSpawnedAgentToolPreferences(session.toolPreferences, userSettings.remoteWorkspace);
     const agent = new ReActAgent_1.ReActAgent(llamaClient, toolRegistry, 15, {
         onStep: (step) => {
             run.steps.push(step);
@@ -1311,7 +1322,8 @@ async function startChatAgentRun(session, userId, request, model, language, sour
             scheduleChatSave(session, 0);
         },
         onToolApprovalRequest: async (approvalRequest) => {
-            if (loadedSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
+            const latestSettings = await getUserSettings(userId);
+            if (latestSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
                 return { approved: true, reason: 'approved' };
             }
             return await new Promise((resolve) => {
@@ -1336,9 +1348,9 @@ async function startChatAgentRun(session, userId, request, model, language, sour
     }, null, language, agentModel, {
         disableMaxIterations: true,
         runId: run.id,
-        contextWindowTokens: loadedSettings.remoteWorkspace.contextWindowTokens,
-        reservedOutputTokens: loadedSettings.remoteWorkspace.reservedOutputTokens,
-        autoCompactThreshold: loadedSettings.remoteWorkspace.autoCompactThreshold,
+        contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+        reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+        autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
     });
     runningAgentRuns.set(run.id, { agent, session, run, sourceSocketChatId });
     void (async () => {
@@ -1372,33 +1384,37 @@ async function startChatAgentRun(session, userId, request, model, language, sour
     return run.id;
 }
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
-app.get('/api/settings', (req, res) => {
+app.get('/api/settings', auth_1.protect, async (req, res) => {
+    const userId = req.user.id;
+    const userSettings = await getUserSettings(userId);
     res.json({
         ui: {
-            showStats: loadedSettings.ui.showStats,
-            selectedPersonality: loadedSettings.ui.selectedPersonality,
-            selectedModel: loadedSettings.ui.selectedModel,
-            defaultToolPreferences: normalizeToolPreferences(loadedSettings.ui.defaultToolPreferences),
+            showStats: userSettings.ui.showStats,
+            selectedPersonality: userSettings.ui.selectedPersonality,
+            selectedModel: userSettings.ui.selectedModel,
+            defaultToolPreferences: normalizeToolPreferences(userSettings.ui.defaultToolPreferences, userSettings.ui.defaultToolPreferences),
         },
-        remoteWorkspace: serializeRemoteWorkspaceSettings(loadedSettings.remoteWorkspace),
+        remoteWorkspace: serializeRemoteWorkspaceSettings(userSettings.remoteWorkspace),
     });
 });
-app.post('/api/settings', async (req, res) => {
+app.post('/api/settings', auth_1.protect, async (req, res) => {
+    const userId = req.user.id;
+    const userSettings = await getUserSettings(userId);
     const { ui, remoteWorkspace } = req.body;
     if (ui) {
-        loadedSettings.ui = { ...loadedSettings.ui, ...ui };
-        loadedSettings.ui.defaultToolPreferences = normalizeToolPreferences(loadedSettings.ui.defaultToolPreferences);
-        await repositories_1.settingsRepository.setUiSettings(loadedSettings.ui);
+        const nextUi = { ...userSettings.ui, ...ui };
+        nextUi.defaultToolPreferences = normalizeToolPreferences(nextUi.defaultToolPreferences, nextUi.defaultToolPreferences);
+        await repositories_1.settingsRepository.setUiSettings(nextUi, userId);
+        userSettings.ui = nextUi;
     }
     if (remoteWorkspace !== undefined) {
         const nextRemoteWorkspace = normalizeRemoteWorkspaceSettings({
             ...remoteWorkspace,
             privateKey: remoteWorkspace.privateKey === ''
-                ? loadedSettings.remoteWorkspace.privateKey
+                ? userSettings.remoteWorkspace.privateKey
                 : remoteWorkspace.privateKey,
         });
-        loadedSettings.remoteWorkspace = nextRemoteWorkspace;
-        await repositories_1.settingsRepository.setRemoteWorkspace(nextRemoteWorkspace);
+        await repositories_1.settingsRepository.setRemoteWorkspace(nextRemoteWorkspace, userId);
     }
     res.json({ success: true });
 });
@@ -1821,7 +1837,8 @@ app.delete('/api/sandbox/:sandboxId/files/:filePath', auth_1.protect, (req, res)
 // Remote SSH workspace browser
 app.get('/api/remote-workspace/files', auth_1.protect, async (req, res) => {
     const { path: filePath } = req.query;
-    const workspace = getConfiguredWorkspaceConfig();
+    const userSettings = await getUserSettings(req.user.id);
+    const workspace = getConfiguredWorkspaceConfig(userSettings.remoteWorkspace);
     if (!workspace?.ssh?.enabled) {
         return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
     }
@@ -1838,7 +1855,8 @@ app.get('/api/remote-workspace/files', auth_1.protect, async (req, res) => {
 app.get('/api/remote-workspace/files/:filePath', auth_1.protect, async (req, res) => {
     const { filePath } = req.params;
     const { offset, limit } = req.query;
-    const workspace = getConfiguredWorkspaceConfig();
+    const userSettings = await getUserSettings(req.user.id);
+    const workspace = getConfiguredWorkspaceConfig(userSettings.remoteWorkspace);
     if (!workspace?.ssh?.enabled) {
         return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
     }
@@ -1966,11 +1984,12 @@ io.on('connection', (socket) => {
             socket.emit('error', { message: 'Chat not found' });
             return;
         }
-        session.toolPreferences = normalizeToolPreferences(toolPreferences ?? session.toolPreferences);
+        const userSettings = await getUserSettings(currentUserId);
+        session.toolPreferences = normalizeToolPreferences(toolPreferences ?? session.toolPreferences, userSettings.ui.defaultToolPreferences);
         session.approvalMode = {
             alwaysApprove: approvalMode?.alwaysApprove ?? session.approvalMode?.alwaysApprove ?? false,
         };
-        const responseModel = model || llamaConfig.model;
+        const responseModel = model || userSettings.ui.selectedModel || llamaConfig.model;
         // Map reasoning effort to maxIterations
         const maxIterationsMap = {
             low: 3,
@@ -1997,11 +2016,11 @@ io.on('connection', (socket) => {
         // so the regular chat model can understand what the agent did.
         const conversationHistory = buildChatConversationHistory(session, true);
         // Get the selected personality from database
-        const selectedPersonalityId = loadedSettings.ui.selectedPersonality;
+        const selectedPersonalityId = userSettings.ui.selectedPersonality;
         let selectedPersonality = null;
         if (selectedPersonalityId) {
             const dbPersonality = await repositories_1.personalityRepository.findById(selectedPersonalityId);
-            if (dbPersonality) {
+            if (dbPersonality && (!dbPersonality.user_id || dbPersonality.user_id === currentUserId)) {
                 selectedPersonality = {
                     id: dbPersonality.id,
                     name: dbPersonality.name,
@@ -2123,7 +2142,7 @@ io.on('connection', (socket) => {
         const userMemories = (await memoryManager.getMemories(currentUserId)).map(m => m.content);
         try {
             // Run the agent with conversation history and memories
-            const result = await agent.run(chatId, message, session.sandboxId, currentUserId, conversationHistory, userMemories, session.toolPreferences, session.approvalMode, getConfiguredWorkspaceConfig());
+            const result = await agent.run(chatId, message, session.sandboxId, currentUserId, conversationHistory, userMemories, session.toolPreferences, session.approvalMode, getConfiguredWorkspaceConfig(userSettings.remoteWorkspace));
             // Store agent state
             session.agentState = {
                 steps: result.steps,
@@ -2411,9 +2430,10 @@ app.delete('/api/personalities/custom/:id', auth_1.protect, async (req, res) => 
         return res.status(404).json({ error: 'Personality not found or is not deletable' });
     }
     // If this was the selected personality, reset to professional
-    if (loadedSettings.ui.selectedPersonality === id) {
-        loadedSettings.ui.selectedPersonality = 'professional';
-        await repositories_1.settingsRepository.setUiSettings(loadedSettings.ui);
+    const userSettings = await getUserSettings(userId);
+    if (userSettings.ui.selectedPersonality === id) {
+        userSettings.ui.selectedPersonality = 'professional';
+        await repositories_1.settingsRepository.setUiSettings(userSettings.ui, userId);
     }
     res.json({ success: true });
 });
@@ -2462,6 +2482,7 @@ const KNOWN_MCP_SERVERS = {
     'sequential-thinking': { packageName: '@modelcontextprotocol/server-sequential-thinking' },
 };
 app.post('/api/mcp/servers', auth_1.protect, async (req, res) => {
+    const userId = req.user.id;
     const { name, url, apiKey, transportType } = req.body;
     if (!name) {
         return res.status(400).json({ error: 'Server name is required' });
@@ -2478,10 +2499,9 @@ app.post('/api/mcp/servers', auth_1.protect, async (req, res) => {
     try {
         await mcpClientManager.addServer(name, config);
         // Save to settings
-        const currentSettings = await repositories_1.settingsRepository.getMcpServers();
+        const currentSettings = await repositories_1.settingsRepository.getMcpServers(userId);
         currentSettings[name] = config;
-        await repositories_1.settingsRepository.setMcpServers(currentSettings);
-        loadedSettings.mcpServers = currentSettings;
+        await repositories_1.settingsRepository.setMcpServers(currentSettings, userId);
         res.json({ success: true, message: `MCP server '${name}' added successfully` });
     }
     catch (error) {
@@ -2490,14 +2510,14 @@ app.post('/api/mcp/servers', auth_1.protect, async (req, res) => {
     }
 });
 app.delete('/api/mcp/servers/:name', auth_1.protect, async (req, res) => {
+    const userId = req.user.id;
     const { name } = req.params;
     try {
         await mcpClientManager.removeServer(name);
         // Remove from settings
-        const currentSettings = await repositories_1.settingsRepository.getMcpServers();
+        const currentSettings = await repositories_1.settingsRepository.getMcpServers(userId);
         delete currentSettings[name];
-        await repositories_1.settingsRepository.setMcpServers(currentSettings);
-        loadedSettings.mcpServers = currentSettings;
+        await repositories_1.settingsRepository.setMcpServers(currentSettings, userId);
         res.json({ success: true, message: `MCP server '${name}' removed successfully` });
     }
     catch (error) {
