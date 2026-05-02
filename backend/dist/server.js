@@ -72,6 +72,9 @@ const upload = (0, multer_1.default)({
         fileSize: 50 * 1024 * 1024, // 50MB limit
     },
 });
+function shellQuote(value) {
+    return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
 // Default settings
 const defaultSettings = {
     llama: {
@@ -735,6 +738,50 @@ function parseWorkspaceListOutput(output, basePath) {
         };
     })
         .filter((item) => item.path && item.path !== '.');
+}
+function normalizeRemoteBrowserPath(input) {
+    const raw = typeof input === 'string' ? input.trim().replaceAll('\\', '/') : '';
+    if (!raw || raw === '/') {
+        return '.';
+    }
+    const normalized = path_1.default.posix.normalize(`/${raw}`).slice(1);
+    if (!normalized || normalized === '.') {
+        return '.';
+    }
+    if (normalized === '..' || normalized.startsWith('../')) {
+        throw new Error('Path escapes remote workspace root.');
+    }
+    return normalized;
+}
+function remoteBrowserAbsolutePath(workspace, relativePath) {
+    const root = workspace.ssh?.root;
+    if (!root) {
+        throw new Error('Remote workspace root is not configured.');
+    }
+    const normalized = normalizeRemoteBrowserPath(relativePath);
+    return normalized === '.'
+        ? path_1.default.posix.normalize(root)
+        : path_1.default.posix.join(path_1.default.posix.normalize(root), normalized);
+}
+function parseRemoteWorkspaceMetadata(output) {
+    return output
+        .split('\n')
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .map((line) => {
+        const [type, encodedPath, encodedName, size, modifiedAt, createdAt, gitStatus] = line.split('\t');
+        const decode = (value) => Buffer.from(value || '', 'base64').toString('utf8');
+        return {
+            path: decode(encodedPath),
+            name: decode(encodedName),
+            isDirectory: type === 'd',
+            isProtected: false,
+            size: Number(size) || 0,
+            modifiedAt: Number(modifiedAt) > 0 ? new Date(Number(modifiedAt) * 1000).toISOString() : null,
+            createdAt: Number(createdAt) > 0 ? new Date(Number(createdAt) * 1000).toISOString() : null,
+            gitStatus: gitStatus && gitStatus !== '-' ? gitStatus : null,
+        };
+    });
 }
 async function getSelectedPersonality(userId, uiSettings) {
     const selectedPersonalityId = uiSettings?.selectedPersonality || defaultSettings.ui.selectedPersonality;
@@ -1844,9 +1891,87 @@ app.get('/api/remote-workspace/files', auth_1.protect, async (req, res) => {
     }
     try {
         const runtime = workspaceRuntimeFactory.createRemote(workspace);
-        const relativePath = typeof filePath === 'string' ? filePath : '.';
-        const listing = await runtime.list(relativePath || '.');
-        res.json(parseWorkspaceListOutput(listing, relativePath));
+        const relativePath = normalizeRemoteBrowserPath(filePath);
+        const target = remoteBrowserAbsolutePath(workspace, relativePath);
+        const root = workspace.ssh.root;
+        const script = `
+root=${shellQuote(root)}
+target=${shellQuote(target)}
+if [ ! -d "$target" ]; then
+  echo "Not a directory: $target" >&2
+  exit 2
+fi
+git_root=""
+if command -v git >/dev/null 2>&1; then
+  git_root=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null || true)
+fi
+find "$target" -maxdepth 1 -mindepth 1 -print 2>/dev/null | sort | while IFS= read -r item; do
+  name=$(basename "$item")
+  rel=$(printf '%s' "$item" | sed "s#^$root/##")
+  [ "$item" = "$root" ] && rel="."
+  type="-"
+  [ -d "$item" ] && type="d"
+  size=$(stat -c '%s' "$item" 2>/dev/null || echo 0)
+  modified=$(stat -c '%Y' "$item" 2>/dev/null || echo 0)
+  created=$(stat -c '%W' "$item" 2>/dev/null || echo -1)
+  if [ "$created" = "-1" ] || [ "$created" = "0" ]; then
+    created=$(stat -c '%Z' "$item" 2>/dev/null || echo 0)
+  fi
+  status="-"
+  if [ -n "$git_root" ]; then
+    git_rel=$(realpath --relative-to="$git_root" "$item" 2>/dev/null || true)
+    if [ -n "$git_rel" ]; then
+      status=$(git -C "$git_root" status --porcelain=v1 -- "$git_rel" 2>/dev/null | head -n 1 | cut -c1-2 | tr ' ' '_' || true)
+      [ -n "$status" ] || status="-"
+    fi
+  fi
+  path64=$(printf '%s' "$rel" | base64 | tr -d '\\n')
+  name64=$(printf '%s' "$name" | base64 | tr -d '\\n')
+  printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' "$type" "$path64" "$name64" "$size" "$modified" "$created" "$status"
+done
+`;
+        const result = await runtime.exec({ command: script, workdir: '.', timeoutMs: 30_000 });
+        if (result.exitCode !== 0) {
+            throw new Error(result.stderr || result.stdout || 'Remote list failed');
+        }
+        res.json(parseRemoteWorkspaceMetadata(result.stdout));
+    }
+    catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
+app.get('/api/remote-workspace/file', auth_1.protect, async (req, res) => {
+    const { path: filePath } = req.query;
+    const userSettings = await getUserSettings(req.user.id);
+    const workspace = getConfiguredWorkspaceConfig(userSettings.remoteWorkspace);
+    if (!workspace?.ssh?.enabled) {
+        return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
+    }
+    if (typeof filePath !== 'string') {
+        return res.status(400).json({ error: 'path is required.' });
+    }
+    try {
+        const runtime = workspaceRuntimeFactory.createRemote(workspace);
+        const decodedPath = normalizeRemoteBrowserPath(filePath);
+        const target = remoteBrowserAbsolutePath(workspace, decodedPath);
+        const script = `
+target=${shellQuote(target)}
+if [ ! -f "$target" ]; then
+  echo "File not found: $target" >&2
+  exit 2
+fi
+if [ -s "$target" ] && ! LC_ALL=C grep -Iq . "$target"; then
+  echo "Cannot read binary file: $target" >&2
+  exit 3
+fi
+base64 < "$target"
+`;
+        const result = await runtime.exec({ command: script, workdir: '.', timeoutMs: 30_000 });
+        if (result.exitCode !== 0) {
+            throw new Error(result.stderr || result.stdout || 'Remote read failed');
+        }
+        const compact = result.stdout.replace(/\s+/g, '');
+        res.json({ content: Buffer.from(compact, 'base64').toString('utf8') });
     }
     catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
@@ -1862,11 +1987,54 @@ app.get('/api/remote-workspace/files/:filePath', auth_1.protect, async (req, res
     }
     try {
         const runtime = workspaceRuntimeFactory.createRemote(workspace);
-        const content = await runtime.readFile(decodeURIComponent(filePath), {
-            offset: offset !== undefined ? Number(offset) : undefined,
-            limit: limit !== undefined ? Number(limit) : undefined,
-        });
-        res.json({ content });
+        const decodedPath = normalizeRemoteBrowserPath(decodeURIComponent(filePath));
+        const raw = req.query.raw === '1' || req.query.raw === 'true';
+        if (!raw) {
+            const content = await runtime.readFile(decodedPath, {
+                offset: offset !== undefined ? Number(offset) : undefined,
+                limit: limit !== undefined ? Number(limit) : undefined,
+            });
+            res.json({ content });
+            return;
+        }
+        const target = remoteBrowserAbsolutePath(workspace, decodedPath);
+        const script = `
+target=${shellQuote(target)}
+if [ ! -f "$target" ]; then
+  echo "File not found: $target" >&2
+  exit 2
+fi
+if [ -s "$target" ] && ! LC_ALL=C grep -Iq . "$target"; then
+  echo "Cannot read binary file: $target" >&2
+  exit 3
+fi
+base64 < "$target"
+`;
+        const result = await runtime.exec({ command: script, workdir: '.', timeoutMs: 30_000 });
+        if (result.exitCode !== 0) {
+            throw new Error(result.stderr || result.stdout || 'Remote read failed');
+        }
+        const compact = result.stdout.replace(/\s+/g, '');
+        res.json({ content: Buffer.from(compact, 'base64').toString('utf8') });
+    }
+    catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
+app.post('/api/remote-workspace/files', auth_1.protect, async (req, res) => {
+    const { path: filePath, content } = req.body;
+    const userSettings = await getUserSettings(req.user.id);
+    const workspace = getConfiguredWorkspaceConfig(userSettings.remoteWorkspace);
+    if (!workspace?.ssh?.enabled) {
+        return res.status(400).json({ error: 'Remote workspace is not configured in Settings.' });
+    }
+    if (typeof filePath !== 'string' || typeof content !== 'string') {
+        return res.status(400).json({ error: 'path and content are required.' });
+    }
+    try {
+        const runtime = workspaceRuntimeFactory.createRemote(workspace);
+        const result = await runtime.writeFile(normalizeRemoteBrowserPath(filePath), content);
+        res.json({ success: true, result });
     }
     catch (error) {
         res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });

@@ -1465,7 +1465,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   className="fixed inset-0 z-20 bg-black/50 md:hidden"
                   onClick={() => setShowRemoteWorkspace(false)}
                 />
-                <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[28px] border-t border-white/10 bg-[#111111] shadow-2xl shadow-black/40 md:static md:inset-auto md:w-full md:max-w-[400px] md:flex-shrink-0 md:rounded-none md:border-l md:border-t-0 md:border-white/5 md:shadow-none">
+                <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[28px] border-t border-white/10 bg-[#111111] shadow-2xl shadow-black/40 md:static md:inset-auto md:w-full md:max-w-[880px] md:flex-shrink-0 md:rounded-none md:border-l md:border-t-0 md:border-white/5 md:shadow-none">
                   <div className="relative flex items-center justify-between border-b border-white/5 bg-[#111111] p-3">
                     <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-white/10 md:hidden" />
                     <h3 className="font-semibold text-zinc-100">Remote workspace</h3>
