@@ -13,7 +13,7 @@ import {
   isTextPart,
 } from './message';
 import { MessageID, PartID, SessionID } from './ids';
-import { buildPrompt, wrapTrailingUserAsSystemReminder } from './promptBuilder';
+import { buildPrompt, buildDynamicStateBlock, wrapTrailingUserAsSystemReminder } from './promptBuilder';
 import {
   executeAgentTool,
   getSshAgentToolDefinitions,
@@ -187,13 +187,31 @@ export class SshAgentRunner {
           agentPrompt: this.options.agentPrompt,
           workspace: this.options.workspace,
           tasks,
+          now: new Date(),
         });
 
-        // The system prompt is sent as the first message.
+        // The static system prompt is identical across all iterations, so
+        // llama.cpp keeps the full KV-cache (f_keep = 1.000) and only
+        // processes the new tokens appended each iteration.
+        // Dynamic state (date, tasks) is appended as a trailing user message
+        // so it does not invalidate the prompt cache prefix.
         const llmMessages: ChatMessage[] = [
-          { role: 'system', content: built.systemPrompt },
+          { role: 'system', content: built.staticSystemPrompt },
           ...wrapTrailingUserAsSystemReminder(built.messages),
         ];
+
+        // Append dynamic state at the end — short, volatile, but after the
+        // cached prefix so it only invalidates a tiny suffix.
+        const dynamicState = buildDynamicStateBlock({
+          messages: refreshed,
+          agentPrompt: this.options.agentPrompt,
+          workspace: this.options.workspace,
+          tasks,
+          now: new Date(),
+        });
+        if (dynamicState) {
+          llmMessages.push(dynamicState);
+        }
 
         const toolDefs = getSshAgentToolDefinitions();
 

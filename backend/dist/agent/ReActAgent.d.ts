@@ -130,6 +130,24 @@ export declare class ReActAgent {
     private getDuplicateReadObservation;
     private validateComposeReadiness;
     private getLanguageInstruction;
+    /**
+      * Build the static portion of the system prompt — content that never changes
+      * across iterations of the same agent run. This is the longest stable prefix
+      * and should be memoized by the caller so llama.cpp can cache it.
+      */
+    private getStaticSystemPrompt;
+    /**
+     * Build the dynamic portion of the system prompt — content that changes every
+     * iteration (date, iteration count, force-final-answer warning). Short and
+     * placed after the static prefix so it doesn't invalidate the llama.cpp KV-cache.
+     */
+    private getDynamicSystemPrompt;
+    /**
+     * Build a trailing user message containing dynamic state (date, iteration,
+     * force-final-answer). Goes at the END of the message sequence so the static
+     * system prompt and conversation history remain cached. Returns null if empty.
+     */
+    private getDynamicStateMessage;
     private getSystemPrompt;
     private buildConversationHistory;
     private getContextBudget;

@@ -87,7 +87,7 @@ class LlamaClient {
                 body: JSON.stringify({
                     prompt: content,
                     n_predict: 0,
-                    cache_prompt: false,
+                    cache_prompt: true,
                 }),
             });
             if (response.ok) {
@@ -136,6 +136,7 @@ class LlamaClient {
                 ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
             })),
             stream: false,
+            cache_prompt: true,
         });
         const message = response.choices[0]?.message;
         const content = message?.content || '';
@@ -169,6 +170,7 @@ class LlamaClient {
                     ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
                 })),
                 stream: true,
+                cache_prompt: true,
             };
             // Add tools if provided
             if (tools && tools.length > 0) {

@@ -658,28 +658,19 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
         };
         return languageInstructions[this.language] || languageInstructions['en'];
     }
-    getSystemPrompt(forceFinalAnswer = false, toolPreferences, memories = [], currentIteration = 0, workspace) {
-        const now = new Date();
-        const dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-        });
-        const timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            timeZoneName: 'short',
-        });
-        const dateTime = `${dateStr}, ${timeStr}`;
+    /**
+      * Build the static portion of the system prompt — content that never changes
+      * across iterations of the same agent run. This is the longest stable prefix
+      * and should be memoized by the caller so llama.cpp can cache it.
+      */
+    getStaticSystemPrompt(toolPreferences, workspace) {
         const enabledToolNames = this.getEnabledToolNames(toolPreferences);
         const toolsAvailable = this.toolRegistry.getFilteredTools(enabledToolNames).length > 0;
         const canCreateAgent = enabledToolNames.includes('create_agent');
         const remoteToolNames = enabledToolNames.filter((toolName) => ['list', 'read', 'glob', 'grep', 'bash', 'terminal_list', 'terminal_read', 'terminal_kill', 'write', 'edit', 'apply_patch', 'memory_get', 'memory_set', 'memory_checkpoint', 'task_create', 'task_update', 'task_list'].includes(toolName));
         const workspaceSection = workspace?.type === 'ssh_remote' && workspace.ssh?.enabled
             ? canCreateAgent
-                ? `\n\n## ACTIVE WORKSPACE\nThe system has SSH credentials for a remote environment.\n- Default host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Default workspace root: ${workspace.ssh.root}\n- For any request to run commands, inspect a codebase, edit files, implement changes, fix bugs, run tests, continue previous remote work, or delegate coding work, call \`create_agent\` with a title, a complete prompt, and the absolute remote workspaceRoot. Do not tell the user to run commands manually.\n- The \`create_agent\` prompt must include clear \`Success Criteria\`, \`Non-goals\`, and \`Required Verification\` sections. Define what solved means, what should not be investigated, and the bounded checks the coding agent should run before stopping.\n- The created agent is separate from this chat response and its live trace will appear in the conversation.\n- Answer directly only for conceptual questions that do not require remote workspace inspection, command execution, or file edits.\n`
+                ? `\n\n## ACTIVE WORKSPACE\nThe system has SSH credentials for a remote environment.\n- Default host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Default workspace root: ${workspace.ssh.root}\n- For any request to run commands, inspect a codebase, edit files, implement changes, fix bugs, continue previous remote work, or delegate coding work, call \`create_agent\` with a title, a complete prompt, and the absolute remote workspaceRoot. Do not tell the user to run commands manually.\n- The \`create_agent\` prompt must include clear \`Success Criteria\`, \`Non-goals\`, and \`Required Verification\` sections. Define what solved means, what should not be investigated, and the bounded checks the coding agent should run before stopping.\n- The created agent is separate from this chat response and its live trace will appear in the conversation.\n- Answer directly only for conceptual questions that do not require remote workspace inspection, command execution, or file edits.\n`
                 : `\n\n## ACTIVE WORKSPACE\nYou are the spawned SSH coding agent for a remote environment.\n- Host: ${workspace.ssh.username}@${workspace.ssh.host}:${workspace.ssh.port || 22}\n- Workspace root: ${workspace.ssh.root}\n- Your enabled remote tools are: ${remoteToolNames.join(', ') || 'none'}.\n- Continue using the remote tools to inspect files, run commands, edit files, and verify the task. Do not tell the user to run commands manually when a tool can do it.\n- Use \`list\`, \`glob\`, \`grep\`, and \`read\` for inspection. Use \`edit\`, \`write\`, and \`apply_patch\` for file modifications. Use \`bash\` for builds, tests, and commands.\n- Before reading a file, consult \`<file_index>\` at the end of the conversation: it lists every file already read in this run with its cached line ranges and revision number. Each cached read is preserved as a \`<file_view path="..." revision="..." lines="A-B">\` block earlier in the context — refer to that block instead of issuing a duplicate \`read\`. The runtime auto-skips reads whose range is already covered, and auto-invalidates cached views when you call \`write\`/\`edit\`/\`apply_patch\` on that file (the index marks them STALE). External content changes are detected by overlap-hash mismatch and also bump the revision. Use \`grep\` or a non-overlapping \`offset\` when you genuinely need new lines; do not re-read a range that is already in \`<file_index>\`.\n- Before starting non-trivial multi-step work, call \`task_create\` once per planned step to lay out a checklist. As you begin a task, call \`task_update\` with status="in_progress"; when finished, call again with status="completed". Use \`task_list\` to recall the plan when uncertain. The user sees this checklist live in the agent trace box, so keep subjects short and imperative ("Add migration for X", "Wire socket event"). Do not use task_create for trivial single-step requests.
 - Use \`memory_get\` when you need to recall project state, file summaries, commands, errors, or prior progress. Use \`memory_checkpoint\` after major milestones, after several file edits, before compaction, and before the final answer.\n- Do not rewrite files already represented in backend memory unless you are intentionally changing their content. If you need to recall what you wrote, call \`memory_get\` instead of \`write\` or \`read\`.\n- Treat any \`User Message:\` observation in your trace as direct steering from the user for this running coding agent.\n- Follow the parent chat's \`Success Criteria\`, \`Non-goals\`, and \`Required Verification\` from your task prompt. When those success criteria are met and the required verification passes, stop tool use and compose the final answer. Do not continue investigating non-goals or unrelated anomalies.\n- Do not call \`${TRANSITION_TO_COMPOSE_TOOL}\` while implementation, file creation, file edits, dependency installation, tests, or verification remain. Keep calling tools instead.\n- If you modify files with \`write\`, \`edit\`, or \`apply_patch\`, inspect or verify afterward with \`read\`, \`grep\`, or \`bash\` before composing the final answer.\n- If a \`bash\` command starts a long-running process, it may return a background terminal id instead of blocking. Use \`terminal_read\` to inspect later output, \`terminal_list\` to find running terminals, and \`terminal_kill\` to stop a terminal when needed. Keep \`terminal_read\` bounded with tailLines/maxBytes.\n- Prefer file-editing tools over shell redirection for code changes. Pass \`workdir\` to \`bash\` instead of using \`cd\`.\n- Treat this as a real remote machine: avoid destructive commands unless explicitly needed and approved.\n`
             : `\n\n## ACTIVE WORKSPACE\nSSH agent mode is not available because no remote workspace is configured in Settings. If the user asks you to run commands, inspect a codebase, edit files, or start an agent, explain that the remote workspace must first be configured in Settings with a host/IP, username, workspace root, and SSH key.\n`;
@@ -688,44 +679,9 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
         if (this.personality) {
             personalitySection = `\n\n## PERSONALITY: ${this.personality.name}\n${this.personality.systemPrompt}\n\n`;
         }
-        // Build memory section
-        let memorySection = '';
-        if (memories.length > 0) {
-            memorySection = `\n\n## MEMORY (Things you remembered from previous conversations):
-${memories.map((m, i) => `${i + 1}. ${m}`).join('\n')}
+        // Build mode-specific sections (static per mode, doesn't change within a mode)
+        const modeSection = this.currentMode === 'research_mode' ? `
 
-Use this information to provide a more personalized experience and avoid asking for things you already know. 
-IMPORTANT: These memories may contain historical dates or information. Always use the "Current Date" provided at the top of this prompt as the definitive current time.\n\n`;
-        }
-        const finalAnswerWarning = forceFinalAnswer
-            ? this.currentMode === 'research_mode'
-                ? `\n\n## URGENT\nThis is the last research turn. Do NOT provide the final answer yet. Your only valid action is to call the native tool \`${TRANSITION_TO_COMPOSE_TOOL}\` so the next turn can compose the final answer.`
-                : '\n\n## URGENT\nProvide your best final answer now. Do not call tools on this turn.'
-            : '';
-        const iterationsRemaining = this.maxIterations - currentIteration;
-        const iterationsContext = this.options.disableMaxIterations
-            ? `\n\n## AGENT LOOP\nIteration: ${currentIteration}. There is no automatic compose step for unfinished coding work. Continue tool execution until the requested task is actually complete, or until the user stops the agent.`
-            : `\n\n## ITERATIONS REMAINING: ${iterationsRemaining} / ${this.maxIterations}\nUse your iterations wisely. The system will automatically transition to the next phase when you reach the iteration limit.`;
-        return `Knowledge Cutoff: December 2023
-Current Date: ${dateTime}
-${iterationsContext}
-
-${this.getLanguageInstruction()}
-
-You are a helpful AI assistant.${toolsAvailable ? ' You have access to tools.' : ' No tools are enabled for this turn, so answer directly without tool calls.'}
-${workspaceSection}${personalitySection}${memorySection}
-
-## TOOL CALLING
-- Use native function tool calling when you need tools.
-- Use only structured tool calls for tools.
-- Do not assume that normal assistant text is safe to emit unless the mode instructions below explicitly allow it.
-- If ${forceFinalAnswer ? 'you are on a forced turn' : 'you still need more data'}, ${forceFinalAnswer
-            ? this.currentMode === 'research_mode'
-                ? `do not answer the user directly; call \`${TRANSITION_TO_COMPOSE_TOOL}\``
-                : 'do not call tools'
-            : 'call tools instead of describing tool usage in prose'}.
-
-${this.currentMode === 'research_mode' ? `
 ## MODE
 You are in RESEARCH_MODE.
 - Your job is to gather information, inspect files, and execute tool calls.
@@ -768,9 +724,9 @@ In your response, you can reference downloadable files like this:
 - "The converted file data.csv is ready for download"
 - "Check the Sandbox Files panel to download result.txt"
 `}
-` : ''}
+` : '';
+        const composeSection = this.currentMode === 'compose_reply_mode' ? `
 
-${this.currentMode === 'compose_reply_mode' ? `
 ## MODE
 You are in COMPOSE_REPLY_MODE.
 - Do not call tools.
@@ -784,15 +740,125 @@ Always use inline sources like this: "[Source Name](URL), ..."
 
 This is REQUIRED for any factual claims, statistics, news, or information obtained from web searches or browsing.
 
-` : ''}
+` : '';
+        return `Knowledge Cutoff: December 2023
 
-Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning}`;
+${this.getLanguageInstruction()}
+
+You are a helpful AI assistant.${toolsAvailable ? ' You have access to tools.' : ' No tools are enabled for this turn, so answer directly without tool calls.'}
+${workspaceSection}${personalitySection}
+
+## TOOL CALLING
+- Use native function tool calling when you need tools.
+- Use only structured tool calls for tools.
+- Do not assume that normal assistant text is safe to emit unless the mode instructions below explicitly allow it.
+- call tools instead of describing tool usage in prose.
+${modeSection}${composeSection}
+
+Be helpful, thorough, and use tools effectively when needed.`;
+    }
+    /**
+     * Build the dynamic portion of the system prompt — content that changes every
+     * iteration (date, iteration count, force-final-answer warning). Short and
+     * placed after the static prefix so it doesn't invalidate the llama.cpp KV-cache.
+     */
+    getDynamicSystemPrompt(forceFinalAnswer = false, memories = [], currentIteration = 0) {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+        });
+        const timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZoneName: 'short',
+        });
+        const dateTime = `${dateStr}, ${timeStr}`;
+        // Build memory section (rarely changes, but tracked as dynamic)
+        let memorySection = '';
+        if (memories.length > 0) {
+            memorySection = `\n\n## MEMORY (Things you remembered from previous conversations):
+${memories.map((m, i) => `${i + 1}. ${m}`).join('\n')}
+
+Use this information to provide a more personalized experience and avoid asking for things you already know. 
+IMPORTANT: These memories may contain historical dates or information. Always use the "Current Date" provided at the top of this prompt as the definitive current time.\n\n`;
+        }
+        const finalAnswerWarning = forceFinalAnswer
+            ? this.currentMode === 'research_mode'
+                ? `\n\n## URGENT\nThis is the last research turn. Do NOT provide the final answer yet. Your only valid action is to call the native tool \`${TRANSITION_TO_COMPOSE_TOOL}\` so the next turn can compose the final answer.`
+                : '\n\n## URGENT\nProvide your best final answer now. Do not call tools on this turn.'
+            : '';
+        const iterationsRemaining = this.maxIterations - currentIteration;
+        const iterationsContext = this.options.disableMaxIterations
+            ? `\n\n## AGENT LOOP\nIteration: ${currentIteration}. There is no automatic compose step for unfinished coding work. Continue tool execution until the requested task is actually complete, or until the user stops the agent.`
+            : `\n\n## ITERATIONS REMAINING: ${iterationsRemaining} / ${this.maxIterations}\nUse your iterations wisely. The system will automatically transition to the next phase when you reach the iteration limit.`;
+        return `Knowledge Cutoff: December 2023
+Current Date: ${dateTime}
+${iterationsContext}${memorySection}${finalAnswerWarning}`;
+    }
+    /**
+     * Build a trailing user message containing dynamic state (date, iteration,
+     * force-final-answer). Goes at the END of the message sequence so the static
+     * system prompt and conversation history remain cached. Returns null if empty.
+     */
+    getDynamicStateMessage(forceFinalAnswer = false, currentIteration = 0) {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+        });
+        const timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            timeZoneName: 'short',
+        });
+        const dateTime = `${dateStr}, ${timeStr}`;
+        const parts = [];
+        parts.push(`Current date/time: ${dateTime}`);
+        if (!this.options.disableMaxIterations) {
+            const iterationsRemaining = this.maxIterations - currentIteration;
+            parts.push(`Iterations remaining: ${iterationsRemaining} / ${this.maxIterations}`);
+        }
+        else {
+            parts.push(`Iteration: ${currentIteration}. No automatic compose step.`);
+        }
+        if (forceFinalAnswer) {
+            const warning = this.currentMode === 'research_mode'
+                ? 'URGENT: This is the last research turn. Call transition_to_compose_mode now.'
+                : 'URGENT: Provide your best final answer now. Do not call tools.';
+            parts.push(warning);
+        }
+        if (parts.length === 0)
+            return null;
+        return {
+            role: 'user',
+            content: parts.join('\n\n'),
+        };
+    }
+    getSystemPrompt(forceFinalAnswer = false, toolPreferences, memories = [], currentIteration = 0, workspace) {
+        // Backward compatible: combines static + dynamic for any code that still
+        // calls this method directly. The buildConversationHistory method now
+        // uses the split approach (static in system, dynamic in trailing user msg).
+        const staticPrompt = this.getStaticSystemPrompt(toolPreferences, workspace);
+        const dynamicPrompt = this.getDynamicSystemPrompt(forceFinalAnswer, memories, currentIteration);
+        return staticPrompt + '\n\n' + dynamicPrompt;
     }
     buildConversationHistory(userMessage, state, conversationHistory = [], forceFinalAnswer = false, toolPreferences, memories = [], workspace, sharedContext, tasks = []) {
+        // llama.cpp requires exactly one system message at position 0.
+        // Use the static system prompt (identity, tools, workspace, mode) which
+        // never changes. Dynamic content (date, iteration count, force-final-
+        // answer) is injected as a trailing user message so it doesn't invalidate
+        // the KV-cache prefix.
         const messages = [
             {
                 role: 'system',
-                content: this.getSystemPrompt(forceFinalAnswer, toolPreferences, memories, state.iteration, workspace),
+                content: this.getStaticSystemPrompt(toolPreferences, workspace),
             },
         ];
         // Add conversation history (previous conversations)
@@ -808,24 +874,10 @@ Be helpful, thorough, and use tools effectively when needed.${finalAnswerWarning
                 content: `<shared_agent_context>\n${sharedContext.trim()}\n</shared_agent_context>`,
             });
         }
-        // Add current user message
-        const now = new Date();
-        const dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-        });
-        const timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            timeZoneName: 'short',
-        });
-        const dateTime = `${dateStr}, ${timeStr}`;
+        // Add current user message (date moved to trailing dynamic state block)
         messages.push({
             role: 'user',
-            content: `[Current Date: ${dateTime}]\n\n${userMessage}`,
+            content: userMessage,
         });
         const fileViewAnalysis = (0, fileViewCache_1.analyzeReadCache)(state.steps, {
             normalizePath: (rawPath) => this.normalizeAgentPath(rawPath, workspace),
@@ -925,6 +977,13 @@ This is the live checklist for this agent run, persisted in the database and vis
 ${lines.join('\n')}
 </task_list>`,
             });
+        }
+        // Add trailing dynamic state message (date, iteration, force-final-answer)
+        // This goes at the very end so the static system prompt and conversation
+        // history remain cacheable by llama.cpp.
+        const dynamicState = this.getDynamicStateMessage(forceFinalAnswer, state.iteration);
+        if (dynamicState) {
+            messages.push(dynamicState);
         }
         return messages;
     }

@@ -29,6 +29,22 @@ import { SSH_AGENT_TOOL_NAMES } from './tools';
 //      - CompactionPart on a user message -> handled in step 1 (it's a marker)
 //   3. Tool outputs that have been pruned (state.time.compacted set) appear
 //      with PRUNED_TOOL_OUTPUT_MARKER instead of their original output.
+//
+// Prompt caching strategy:
+//   The system prompt is split into static and dynamic sections. The static
+//   portion (identity, tone, tool policy, workspace config, project
+//   instructions, agent task) is returned separately so the caller can
+//   memoize it across iterations. Dynamic content (date/time, task list) is
+//   injected as trailing user messages so they do not invalidate the cached
+//   KV-prefix on llama.cpp.
+//
+//   Resulting message order sent to llama.cpp:
+//     [system] static prompt (cacheable, never changes)
+//     [system] dynamic prompt (date, tasks — short, changes every iteration)
+//     [user] compaction summary (stable until next compaction)
+//     [user/assistant/tool] conversation history (old parts cached)
+//     [user] dynamic state block (date, tasks — short, volatile)
+//     [user] current user message / system-reminder (volatile)
 
 export interface SshAgentPromptInput {
   /** Stored history loaded from the DB on this iteration. */
@@ -46,7 +62,8 @@ export interface SshAgentPromptInput {
 }
 
 export interface BuiltPrompt {
-  systemPrompt: string;
+  /** Static system prompt — identical across all iterations for KV-cache hit. */
+  staticSystemPrompt: string;
   messages: ChatMessage[];
 }
 
@@ -247,7 +264,12 @@ function taskBlock(tasks: AgentRunTask[]): string {
   ].join('\n');
 }
 
-export function buildSystemPrompt(input: SshAgentPromptInput): string {
+/**
+ * Build the static portion of the system prompt — content that never changes
+ * across iterations of the same agent run. This is the longest stable prefix
+ * and should be memoized by the caller so llama.cpp can cache it.
+ */
+export function buildStaticSystemPrompt(input: SshAgentPromptInput): string {
   const sections: string[] = [];
   sections.push('You are Operator SSH Agent, a coding agent that operates over SSH on a remote workspace.');
   sections.push('You are an interactive tool that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.');
@@ -290,18 +312,52 @@ export function buildSystemPrompt(input: SshAgentPromptInput): string {
     ].join('\n'));
   }
 
-  sections.push(`# Environment\nCurrent date/time: ${dateTimeBlock(input.now)}`);
-
-  const tb = taskBlock(input.tasks || []);
-  if (tb) sections.push(tb);
-
   return sections.join('\n\n');
 }
 
+/**
+ * Build the dynamic portion of the system prompt — content that changes every
+ * iteration. This is short and placed after the static prefix so it doesn't
+ * invalidate the llama.cpp KV-cache.
+ */
+export function buildDynamicSystemPrompt(now?: Date): string {
+  return `# Environment\nCurrent date/time: ${dateTimeBlock(now)}`;
+}
+
+/**
+ * Build a trailing user message containing dynamic state (date, task list).
+ * This goes at the END of the message sequence so the static system prompt
+ * and conversation history remain cached. Returns null if there is nothing
+ * to report.
+ */
+export function buildDynamicStateBlock(input: SshAgentPromptInput): ChatMessage | null {
+  const parts: string[] = [];
+
+  const dt = dateTimeBlock(input.now);
+  parts.push(`Current date/time: ${dt}`);
+
+  const tb = taskBlock(input.tasks || []);
+  if (tb) {
+    parts.push(tb);
+  }
+
+  if (parts.length === 0) return null;
+
+  return {
+    role: 'user',
+    content: parts.join('\n\n'),
+  };
+}
+
 export function buildPrompt(input: SshAgentPromptInput): BuiltPrompt {
-  const systemPrompt = buildSystemPrompt(input);
+  const staticSystemPrompt = buildStaticSystemPrompt(input);
   const { suffix, summary } = applyCompactionFilter(input.messages);
 
+  // The system prompt is purely static — identical across all iterations.
+  // This gives llama.cpp f_keep = 1.000 (full context preserved) so it
+  // only ever needs to process the NEW tokens appended each iteration.
+  // Dynamic content (date, tasks) is sent as a trailing user message
+  // via buildDynamicStateBlock() so it doesn't invalidate the cache.
   const messages: ChatMessage[] = [];
   if (summary && summary.length > 0) {
     // Inject the synthetic compaction surface that mirrors opencode's contract.
@@ -310,7 +366,7 @@ export function buildPrompt(input: SshAgentPromptInput): BuiltPrompt {
   }
   messages.push(...partsToMessages(suffix));
 
-  return { systemPrompt, messages };
+  return { staticSystemPrompt, messages };
 }
 
 /**

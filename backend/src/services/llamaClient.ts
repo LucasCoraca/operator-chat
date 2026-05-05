@@ -163,7 +163,7 @@ export class LlamaClient {
         body: JSON.stringify({
           prompt: content,
           n_predict: 0,
-          cache_prompt: false,
+          cache_prompt: true,
         }),
       });
 
@@ -217,7 +217,7 @@ export class LlamaClient {
       });
     }
 
-    const response = await this.client.chat.completions.create({
+   const response = await this.client.chat.completions.create({
       model: options?.model || this.config.model || '',
       messages: safeMessages.map(msg => ({
         role: msg.role,
@@ -226,7 +226,8 @@ export class LlamaClient {
         ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
       })) as any,
       stream: false,
-    });
+      cache_prompt: true,
+    } as any);
 
     const message = response.choices[0]?.message;
     const content = message?.content || '';
@@ -273,7 +274,8 @@ export class LlamaClient {
           ...(msg.tool_call_id && { tool_call_id: msg.tool_call_id }),
         })) as any,
         stream: true,
-      };
+        cache_prompt: true,
+      } as any;
 
       // Add tools if provided
       if (tools && tools.length > 0) {
