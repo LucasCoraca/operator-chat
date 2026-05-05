@@ -26,6 +26,7 @@ const db_1 = require("./db");
 const repositories_1 = require("./repositories");
 const schedule_1 = require("./services/schedule");
 const sshAgentRunner_1 = require("./agent/v2/sshAgentRunner");
+const outputCap_1 = require("./agent/v2/outputCap");
 const ids_1 = require("./agent/v2/ids");
 // JWT secret for socket.io
 const JWT_SECRET = process.env.JWT_SECRET || 'operator-chat-secret-key-12345';
@@ -2644,9 +2645,10 @@ io.on('connection', (socket) => {
         console.log('Client disconnected:', socket.id);
     });
 });
-// Static serving for screenshots and tool overflow files written under /tmp/operatorchat
-// by the SSH agent's `browser` tool and outputCap. Filenames are restricted to a safe
-// charset so a compromised tool result can't escape the directory. Auth comes either from
+// Static serving for screenshots and tool overflow files written under
+// ATTACHMENTS_ROOT (default <cwd>/data/agent-attachments, configurable via
+// OPERATOR_ATTACHMENTS_DIR). Filenames are restricted to a safe charset so a
+// compromised tool result can't escape the directory. Auth comes either from
 // the standard Authorization header or a `?token=` query param so <img> tags work.
 app.get('/api/agent-attachments/:filename', (req, res) => {
     const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
@@ -2665,9 +2667,9 @@ app.get('/api/agent-attachments/:filename', (req, res) => {
     if (!/^[A-Za-z0-9_.-]+$/.test(filename) || filename.includes('..')) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
-    const root = '/tmp/operatorchat';
+    const root = path_1.default.resolve(outputCap_1.TMP_ROOT);
     const fullPath = path_1.default.resolve(root, filename);
-    if (!fullPath.startsWith(`${root}/`)) {
+    if (!fullPath.startsWith(`${root}${path_1.default.sep}`)) {
         return res.status(400).json({ error: 'Invalid filename' });
     }
     fs_1.default.stat(fullPath, (err) => {

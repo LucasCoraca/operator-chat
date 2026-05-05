@@ -244,9 +244,10 @@ function workspaceBlock(workspace?: WorkspaceConfig): string {
     '## VERIFY WEB APPS WITH THE BROWSER TOOL',
     `- After bringing a web app up, ALWAYS verify it with \`browser visit ${hostUrl}:<port>\` and inspect the screenshot, page text, network entries (look for non-2xx responses), and console messages.`,
     '- A successful `curl` is necessary but not sufficient. Pages can return 200 with broken hydration, missing assets, or runtime JS errors only visible in a real browser.',
-    '- For UIs that depend on user interaction, follow up with `browser click`, `browser type`, and `browser scroll` to exercise the golden path before declaring the task done.',
-    '- For `<select>` dropdown menus, use `browser select` with the selector of the `<select>` element and the `value` of the option to pick — do NOT try to click the dropdown and then click an option (headless Puppeteer cannot render native dropdowns). Use `browser actions` with a batch of sub-actions for sequences of interactions.',
-    '- When performing a sequence of browser interactions (e.g. click → type → click → scroll), use `browser actions` with a batch of sub-actions in a single call instead of separate calls. This avoids an LLM round-trip between each step and is significantly faster.',
+    '- For UIs that depend on user interaction, follow up with `browser click`, `browser type`, `browser press`, `browser hover`, `browser scroll`, etc. to exercise the golden path before declaring the task done.',
+    '- For `<select>` dropdown menus, use `browser select` with the selector of the `<select>` element and the `value` of the option to pick — do NOT try to click the dropdown and then click an option (headless Puppeteer cannot render native dropdowns).',
+    '- Available actions: visit, click, type (with optional submit:true), clear, press (any keyboard key — Enter/Tab/Escape/ArrowDown/etc), hover, focus, scroll, select, wait_for (selector to appear/disappear), evaluate (run async JS, returns serialized value), back, forward, reload. Use `browser actions` with a batch of sub-actions for sequences — avoids an LLM round-trip per step and captures a screenshot per sub-action shown as an animated sequence.',
+    '- Reach for `browser evaluate` when no built-in action covers what you need (read computed styles, inspect localStorage, dispatch a custom event, etc.). Use `browser wait_for` instead of fixed `wait` sleeps when waiting for content to appear.',
     '- If the browser visit returns a screenshot or console errors, treat that as the source of truth. Fix any console/network errors you see before reporting success.',
   ].join('\n');
 }
@@ -298,7 +299,7 @@ export function buildStaticSystemPrompt(input: SshAgentPromptInput): string {
     '# Tool usage policy',
     '- Prefer read/edit/write/apply_patch for file work. Reach for bash only when you actually need shell semantics (builds, tests, git, package managers).',
     '- After modifying files, verify with a bounded check (build, lint, or a focused test) before declaring success.',
-    '- Use `/tmp/operatorchat` on the local backend for any auxiliary scratch files.',
+    '- The backend persists tool overflow files and browser screenshots under `data/agent-attachments` (or the path in `OPERATOR_ATTACHMENTS_DIR`); use that directory for any auxiliary scratch files referenced from tool output.',
   ].join('\n'));
 
   sections.push(workspaceBlock(input.workspace));

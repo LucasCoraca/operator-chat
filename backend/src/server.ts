@@ -21,6 +21,7 @@ import { initializeDatabase, testConnection } from './db';
 import { chatRepository, personalityRepository, settingsRepository, taskRepository, ScheduledTask, agentRunTaskRepository, agentSessionRepository } from './repositories';
 import { computeNextRun, computeNextRunForTask, normalizeDaysOfWeek } from './services/schedule';
 import { SshAgentRunner } from './agent/v2/sshAgentRunner';
+import { TMP_ROOT as ATTACHMENTS_ROOT } from './agent/v2/outputCap';
 import { MessageID, PartID, SessionID } from './agent/v2/ids';
 import type { UserMessage as V2UserMessage, TextPart as V2TextPart } from './agent/v2/message';
 
@@ -3206,9 +3207,10 @@ io.on('connection', (socket) => {
   });
 });
 
-// Static serving for screenshots and tool overflow files written under /tmp/operatorchat
-// by the SSH agent's `browser` tool and outputCap. Filenames are restricted to a safe
-// charset so a compromised tool result can't escape the directory. Auth comes either from
+// Static serving for screenshots and tool overflow files written under
+// ATTACHMENTS_ROOT (default <cwd>/data/agent-attachments, configurable via
+// OPERATOR_ATTACHMENTS_DIR). Filenames are restricted to a safe charset so a
+// compromised tool result can't escape the directory. Auth comes either from
 // the standard Authorization header or a `?token=` query param so <img> tags work.
 app.get('/api/agent-attachments/:filename', (req, res) => {
   const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
@@ -3227,9 +3229,9 @@ app.get('/api/agent-attachments/:filename', (req, res) => {
   if (!/^[A-Za-z0-9_.-]+$/.test(filename) || filename.includes('..')) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
-  const root = '/tmp/operatorchat';
+  const root = path.resolve(ATTACHMENTS_ROOT);
   const fullPath = path.resolve(root, filename);
-  if (!fullPath.startsWith(`${root}/`)) {
+  if (!fullPath.startsWith(`${root}${path.sep}`)) {
     return res.status(400).json({ error: 'Invalid filename' });
   }
   fs.stat(fullPath, (err) => {

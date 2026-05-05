@@ -13,7 +13,12 @@ import crypto from 'crypto';
 
 export const MAX_LINES = 2_000;
 export const MAX_BYTES = 50 * 1024;
-export const TMP_ROOT = '/tmp/operatorchat';
+// Persistent storage for tool overflow files and browser screenshots. Defaults
+// to <cwd>/data/agent-attachments — in Docker that's /app/data/... which is
+// already covered by the backend_data volume; in local dev it's
+// backend/data/agent-attachments. /tmp would be wiped on container restart.
+export const TMP_ROOT = process.env.OPERATOR_ATTACHMENTS_DIR
+  || path.resolve(process.cwd(), 'data', 'agent-attachments');
 
 export interface CapResult {
   /** Possibly-truncated text that the LLM will see. */

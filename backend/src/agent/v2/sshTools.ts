@@ -5,7 +5,7 @@ import type { ToolDefinition } from '../../services/llamaClient';
 import type { WorkspaceConfig, WorkspaceRuntime } from '../../services/workspaceRuntime';
 import { WorkspaceRuntimeFactory } from '../../services/workspaceRuntime';
 import type { SandboxManager } from '../../services/sandboxManager';
-import { BrowserClient, BrowserSessionResult } from '../../services/browserClient';
+import { BrowserClient, BrowserSessionResult, BrowserSubAction } from '../../services/browserClient';
 import type { AgentSessionRepository } from '../../repositories/agentSessionRepository';
 import type {
   AgentRunTaskRepository,
@@ -615,31 +615,51 @@ const taskTool: SshAgentTool = {
   },
 };
 
+const BROWSER_DIRECT_ACTIONS = [
+  'visit', 'click', 'type', 'scroll', 'select',
+  'press', 'hover', 'focus', 'clear', 'evaluate',
+  'back', 'forward', 'reload', 'wait_for',
+  'actions',
+] as const;
+
 const browserTool: SshAgentTool = {
   name: 'browser',
   description:
-    'Open a URL or interact with a previously opened page. Returns the rendered text, plus optional screenshot, network activity, and console logs. Actions: visit | click | type | scroll | select | actions. The "select" action picks an option in a <select> dropdown by value. The "actions" batch action accepts an array of sub-actions (click, type, scroll, wait, select) to execute in a single call — use this instead of separate calls for sequences of interactions.',
+    'Drive a headless Chromium page. Call once per action, or use action=actions with a sub-action array to chain steps in a single call. Every action returns: page URL/title, rendered text, a screenshot (animated when batched), captured network activity, and console logs. Actions: visit (load URL) | click | type (with optional submit:true to press Enter) | clear (empty an input) | press (keyboard key, optionally focus selector first) | hover | focus | scroll | select (<select> by value) | wait_for (selector to appear/disappear) | evaluate (run async JS, returns serialized value) | back | forward | reload | actions (batch). Use action=actions with a list of sub-actions to avoid round-trips for sequences.',
   parameters: {
     type: 'object',
     properties: {
-      action: { type: 'string', description: 'visit | click | type | scroll | select | actions (batch)' },
-      url: { type: 'string', description: 'URL to load (only for action=visit).' },
-      selector: { type: 'string', description: 'CSS selector (for click / type / select).' },
-      text: { type: 'string', description: 'Text to type (for type).' },
-      scroll_y: { type: 'number', description: 'Pixels to scroll vertically (for scroll).' },
-      value: { type: 'string', description: 'Option value to select (for action=select).' },
+      action: { type: 'string', description: BROWSER_DIRECT_ACTIONS.join(' | ') },
+      url: { type: 'string', description: 'URL to load (action=visit).' },
+      selector: { type: 'string', description: 'CSS selector (click/type/select/press/hover/focus/clear/wait_for).' },
+      text: { type: 'string', description: 'Text to type (action=type).' },
+      submit: { type: 'boolean', description: 'After typing, press Enter (action=type).' },
+      scroll_y: { type: 'number', description: 'Pixels to scroll vertically (action=scroll). Negative scrolls up.' },
+      value: { type: 'string', description: 'Option value (action=select).' },
+      key: { type: 'string', description: 'Key to press, e.g. Enter | Tab | Escape | ArrowDown (action=press).' },
+      script: { type: 'string', description: 'Async JS body to evaluate; the return value is JSON-serialized (action=evaluate).' },
+      timeout_ms: { type: 'number', description: 'Wait timeout in milliseconds (action=wait_for, default 10000).' },
+      hidden: { type: 'boolean', description: 'For wait_for: wait until the element is hidden/removed instead of visible.' },
       actions: {
         type: 'array',
-        description: 'Batch of sub-actions to execute in sequence (for action=actions). Each item has "action" (click/type/scroll/wait/select), and optionally "selector", "text", "scroll_y", "ms" (wait duration), or "value" (for select).',
+        description: 'Batch of sub-actions executed in sequence (action=actions). Each sub-action has the same fields as the top-level action.',
         items: {
           type: 'object',
           properties: {
-            action: { type: 'string', enum: ['click', 'type', 'scroll', 'wait', 'select'] },
+            action: {
+              type: 'string',
+              enum: ['click', 'type', 'scroll', 'wait', 'select', 'screenshot', 'press', 'hover', 'focus', 'clear', 'evaluate', 'back', 'forward', 'reload', 'wait_for'],
+            },
             selector: { type: 'string' },
             text: { type: 'string' },
+            submit: { type: 'boolean' },
             scroll_y: { type: 'number' },
-            ms: { type: 'number' },
-            value: { type: 'string', description: 'Option value to select (for action=select).' },
+            ms: { type: 'number', description: 'Sleep duration for action=wait.' },
+            value: { type: 'string' },
+            key: { type: 'string' },
+            script: { type: 'string' },
+            timeout_ms: { type: 'number' },
+            hidden: { type: 'boolean' },
           },
           required: ['action'],
         },
@@ -662,31 +682,17 @@ const browserTool: SshAgentTool = {
       if (!Array.isArray(batch) || batch.length === 0) {
         return capResult('browser', 'Error: "actions" requires an array of sub-actions', true);
       }
-      result = await client.sessionActions(sessionKey, batch as any);
-    } else if (!['visit', 'click', 'type', 'scroll'].includes(action)) {
-      return capResult('browser', 'Error: action must be visit | click | type | scroll | actions', true);
+      result = await client.sessionActions(sessionKey, batch as BrowserSubAction[], true);
+    } else if (!BROWSER_DIRECT_ACTIONS.includes(action as any)) {
+      return capResult('browser', `Error: action must be one of ${BROWSER_DIRECT_ACTIONS.join(' | ')}`, true);
     } else if (action === 'visit') {
       const url = String(args.url || '').trim();
       if (!url) return capResult('browser', 'Error: url is required for visit', true);
       result = await client.sessionVisit(sessionKey, url);
-    } else if (action === 'click') {
-      const selector = String(args.selector || '').trim();
-      if (!selector) return capResult('browser', 'Error: selector is required for click', true);
-      result = await client.sessionClick(sessionKey, selector);
-    } else if (action === 'type') {
-      const selector = String(args.selector || '').trim();
-      const text = String(args.text ?? '');
-      if (!selector) return capResult('browser', 'Error: selector is required for type', true);
-      result = await client.sessionType(sessionKey, selector, text);
-    } else if (action === 'select') {
-      const selector = String(args.selector || '').trim();
-      const value = String(args.value ?? '').trim();
-      if (!selector) return capResult('browser', 'Error: selector is required for select', true);
-      if (!value) return capResult('browser', 'Error: value is required for select', true);
-      result = await client.sessionActions(sessionKey, [{ action: 'select', selector, value }]);
     } else {
-      const deltaY = typeof args.scroll_y === 'number' ? args.scroll_y : 600;
-      result = await client.sessionScroll(sessionKey, deltaY);
+      const sub = buildSubActionFromArgs(action, args);
+      if ('error' in sub) return capResult('browser', `Error: ${sub.error}`, true);
+      result = await client.sessionActions(sessionKey, [sub.action]);
     }
 
     const includeNetwork = args.include_network !== false;
@@ -701,7 +707,9 @@ const browserTool: SshAgentTool = {
     if (result.actions && result.actions.length > 0) {
       lines.push('', '## Batch results');
       for (const r of result.actions) {
-        lines.push(`- ${r.action}: ${r.success ? 'OK' : `FAIL — ${r.error}`}`);
+        const status = r.success ? 'OK' : `FAIL — ${r.error}`;
+        const tail = r.success && r.result ? ` → ${r.result}` : '';
+        lines.push(`- ${r.action}: ${status}${tail}`);
       }
     }
     if (result.text) {
@@ -735,13 +743,25 @@ const browserTool: SshAgentTool = {
         ]
       : undefined;
 
+    const sequenceAttachments = result.screenshotPaths
+      ? result.screenshotPaths.map((p, i) => ({
+          mime: 'image/png' as const,
+          filename: `frame_${String(i + 1).padStart(3, '0')}_${path.basename(p)}`,
+          url: `/api/agent-attachments/${path.basename(p)}`,
+        }))
+      : undefined;
+
+    const attachments = sequenceAttachments && sequenceAttachments.length > 1
+      ? sequenceAttachments
+      : screenshotAttachment;
+
     const capped = capOutput(lines.join('\n'), { maxLines: MAX_LINES, maxBytes: MAX_BYTES, label: 'browser' });
     return {
       output: capped.text,
       isError: Boolean(result.error),
       truncated: capped.truncated,
       fullPath: capped.fullPath,
-      attachments: screenshotAttachment,
+      attachments,
     };
   },
 };
@@ -800,4 +820,70 @@ export function getSshAgentToolPolicy(name: string): SshAgentToolPolicy | undefi
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+function buildSubActionFromArgs(
+  action: string,
+  args: Record<string, any>,
+): { action: BrowserSubAction } | { error: string } {
+  const selector = typeof args.selector === 'string' ? args.selector.trim() : '';
+  const need = (val: string, name: string) => (val ? null : `${name} is required for ${action}`);
+
+  switch (action) {
+    case 'click': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      return { action: { action: 'click', selector } };
+    }
+    case 'type': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      return { action: { action: 'type', selector, text: String(args.text ?? ''), submit: Boolean(args.submit) } };
+    }
+    case 'scroll': {
+      return { action: { action: 'scroll', scroll_y: typeof args.scroll_y === 'number' ? args.scroll_y : 600 } };
+    }
+    case 'select': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      const value = String(args.value ?? '').trim();
+      if (!value) return { error: 'value is required for select' };
+      return { action: { action: 'select', selector, value } };
+    }
+    case 'press': {
+      const key = String(args.key ?? '').trim();
+      if (!key) return { error: 'key is required for press' };
+      return { action: { action: 'press', key, selector: selector || undefined } };
+    }
+    case 'hover': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      return { action: { action: 'hover', selector } };
+    }
+    case 'focus': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      return { action: { action: 'focus', selector } };
+    }
+    case 'clear': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      return { action: { action: 'clear', selector } };
+    }
+    case 'evaluate': {
+      const script = String(args.script ?? '').trim();
+      if (!script) return { error: 'script is required for evaluate' };
+      return { action: { action: 'evaluate', script } };
+    }
+    case 'back':    return { action: { action: 'back' } };
+    case 'forward': return { action: { action: 'forward' } };
+    case 'reload':  return { action: { action: 'reload' } };
+    case 'wait_for': {
+      const e = need(selector, 'selector'); if (e) return { error: e };
+      return {
+        action: {
+          action: 'wait_for',
+          selector,
+          timeout_ms: typeof args.timeout_ms === 'number' ? args.timeout_ms : undefined,
+          hidden: Boolean(args.hidden),
+        },
+      };
+    }
+    default:
+      return { error: `unsupported action: ${action}` };
+  }
 }

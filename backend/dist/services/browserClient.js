@@ -9,7 +9,8 @@ const turndown_1 = __importDefault(require("turndown"));
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const crypto_1 = __importDefault(require("crypto"));
-const SCREENSHOT_DIR = '/tmp/operatorchat';
+const outputCap_1 = require("../agent/v2/outputCap");
+const SCREENSHOT_DIR = outputCap_1.TMP_ROOT;
 const NETWORK_BUFFER_MAX = 200;
 const CONSOLE_BUFFER_MAX = 200;
 const SESSION_IDLE_MS = 10 * 60 * 1000;
@@ -472,68 +473,70 @@ class BrowserClient {
         this.sessions.delete(sessionId);
     }
     // ── Batch actions — execute multiple browser steps in one call ──────────────
-    async sessionActions(sessionId, actions) {
+    async sessionActions(sessionId, actions, captureScreenshots = false) {
         this.cleanupIdleSessions();
         const state = await this.ensureSession(sessionId);
         const results = [];
+        const screenshotPaths = [];
+        if (captureScreenshots) {
+            const initial = await this.takeScreenshot(state);
+            if (initial)
+                screenshotPaths.push(initial);
+        }
+        const captureFrame = async () => {
+            if (!captureScreenshots)
+                return;
+            const s = await this.takeScreenshot(state);
+            if (s)
+                screenshotPaths.push(s);
+        };
         for (const a of actions) {
-            const actionType = a.action;
-            switch (actionType) {
-                case 'click': {
-                    const clickAction = a;
-                    try {
-                        await state.page.waitForSelector(clickAction.selector, { timeout: 10_000 });
-                        await state.page.click(clickAction.selector);
+            try {
+                switch (a.action) {
+                    case 'screenshot': {
+                        const s = await this.takeScreenshot(state);
+                        if (s)
+                            screenshotPaths.push(s);
+                        results.push({ action: 'screenshot', success: true });
+                        break;
+                    }
+                    case 'click': {
+                        await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                        await state.page.click(a.selector);
                         await new Promise((resolve) => setTimeout(resolve, 500));
-                        results.push({ action: `click ${clickAction.selector}`, success: true });
+                        results.push({ action: `click ${a.selector}`, success: true });
+                        await captureFrame();
+                        break;
                     }
-                    catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        results.push({ action: `click ${clickAction.selector}`, success: false, error: message });
-                    }
-                    break;
-                }
-                case 'type': {
-                    const typeAction = a;
-                    try {
-                        await state.page.waitForSelector(typeAction.selector, { timeout: 10_000 });
-                        await state.page.click(typeAction.selector, { clickCount: 3 });
-                        await state.page.type(typeAction.selector, typeAction.text, { delay: 5 });
+                    case 'type': {
+                        await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                        await state.page.click(a.selector, { clickCount: 3 });
+                        await state.page.type(a.selector, a.text, { delay: 5 });
+                        if (a.submit)
+                            await state.page.keyboard.press('Enter');
                         await new Promise((resolve) => setTimeout(resolve, 300));
-                        results.push({ action: `type ${typeAction.selector}`, success: true });
+                        results.push({ action: `type ${a.selector}${a.submit ? ' ⏎' : ''}`, success: true });
+                        await captureFrame();
+                        break;
                     }
-                    catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        results.push({ action: `type ${typeAction.selector}`, success: false, error: message });
-                    }
-                    break;
-                }
-                case 'scroll': {
-                    const scrollAction = a;
-                    try {
-                        const deltaY = typeof scrollAction.scroll_y === 'number' ? scrollAction.scroll_y : 600;
+                    case 'scroll': {
+                        const deltaY = typeof a.scroll_y === 'number' ? a.scroll_y : 600;
                         await state.page.evaluate((y) => window.scrollBy({ top: y, behavior: 'instant' }), deltaY);
                         await new Promise((resolve) => setTimeout(resolve, 200));
-                        results.push({ action: 'scroll', success: true });
+                        results.push({ action: `scroll ${deltaY}px`, success: true });
+                        await captureFrame();
+                        break;
                     }
-                    catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        results.push({ action: 'scroll', success: false, error: message });
+                    case 'wait': {
+                        const ms = typeof a.ms === 'number' ? a.ms : 500;
+                        await new Promise((resolve) => setTimeout(resolve, ms));
+                        results.push({ action: `wait ${ms}ms`, success: true });
+                        await captureFrame();
+                        break;
                     }
-                    break;
-                }
-                case 'wait': {
-                    const waitAction = a;
-                    const ms = typeof waitAction.ms === 'number' ? waitAction.ms : 500;
-                    await new Promise((resolve) => setTimeout(resolve, ms));
-                    results.push({ action: `wait ${ms}ms`, success: true });
-                    break;
-                }
-                case 'select': {
-                    const selectAction = a;
-                    try {
-                        await state.page.waitForSelector(selectAction.selector, { timeout: 10_000 });
-                        await state.page.evaluate(({ sel, val }) => {
+                    case 'select': {
+                        await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                        const err = await state.page.evaluate(({ sel, val }) => {
                             const el = document.querySelector(sel);
                             if (!el || el.tagName !== 'SELECT')
                                 return `Element is not a <select>: ${sel}`;
@@ -541,17 +544,112 @@ class BrowserClient {
                             el.dispatchEvent(new Event('change', { bubbles: true }));
                             el.dispatchEvent(new Event('input', { bubbles: true }));
                             return null;
-                        }, { sel: selectAction.selector, val: selectAction.value });
-                        results.push({ action: `select ${selectAction.selector} → ${selectAction.value}`, success: true });
+                        }, { sel: a.selector, val: a.value });
+                        if (err) {
+                            results.push({ action: `select ${a.selector}`, success: false, error: err });
+                        }
+                        else {
+                            results.push({ action: `select ${a.selector} → ${a.value}`, success: true });
+                            await captureFrame();
+                        }
+                        break;
                     }
-                    catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        results.push({ action: `select ${selectAction.selector}`, success: false, error: message });
+                    case 'press': {
+                        if (a.selector) {
+                            await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                            await state.page.focus(a.selector);
+                        }
+                        await state.page.keyboard.press(a.key);
+                        await new Promise((resolve) => setTimeout(resolve, 200));
+                        results.push({ action: `press ${a.key}${a.selector ? ` on ${a.selector}` : ''}`, success: true });
+                        await captureFrame();
+                        break;
                     }
-                    break;
+                    case 'hover': {
+                        await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                        await state.page.hover(a.selector);
+                        await new Promise((resolve) => setTimeout(resolve, 200));
+                        results.push({ action: `hover ${a.selector}`, success: true });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'focus': {
+                        await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                        await state.page.focus(a.selector);
+                        results.push({ action: `focus ${a.selector}`, success: true });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'clear': {
+                        await state.page.waitForSelector(a.selector, { timeout: 10_000 });
+                        await state.page.evaluate((sel) => {
+                            const el = document.querySelector(sel);
+                            if (!el)
+                                return;
+                            if ('value' in el) {
+                                el.value = '';
+                                el.dispatchEvent(new Event('input', { bubbles: true }));
+                                el.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        }, a.selector);
+                        results.push({ action: `clear ${a.selector}`, success: true });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'evaluate': {
+                        const value = await state.page.evaluate((src) => {
+                            // eslint-disable-next-line no-new-func
+                            const fn = new Function(`"use strict"; return (async () => { ${src} })();`);
+                            return Promise.resolve(fn()).then((v) => {
+                                try {
+                                    return JSON.stringify(v);
+                                }
+                                catch {
+                                    return String(v);
+                                }
+                            });
+                        }, a.script);
+                        const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+                        results.push({ action: 'evaluate', success: true, result: serialized?.slice(0, 4000) });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'back': {
+                        const r = await state.page.goBack({ waitUntil: 'networkidle2', timeout: 30_000 });
+                        results.push({ action: 'back', success: true, result: r ? `→ ${r.url()}` : 'no history' });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'forward': {
+                        const r = await state.page.goForward({ waitUntil: 'networkidle2', timeout: 30_000 });
+                        results.push({ action: 'forward', success: true, result: r ? `→ ${r.url()}` : 'no history' });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'reload': {
+                        await state.page.reload({ waitUntil: 'networkidle2', timeout: 30_000 });
+                        results.push({ action: 'reload', success: true });
+                        await captureFrame();
+                        break;
+                    }
+                    case 'wait_for': {
+                        await state.page.waitForSelector(a.selector, {
+                            timeout: typeof a.timeout_ms === 'number' ? a.timeout_ms : 10_000,
+                            hidden: a.hidden === true,
+                        });
+                        results.push({ action: `wait_for ${a.selector}${a.hidden ? ' (hidden)' : ''}`, success: true });
+                        await captureFrame();
+                        break;
+                    }
+                    default: {
+                        const unknown = a.action;
+                        results.push({ action: String(unknown), success: false, error: 'unknown action' });
+                    }
                 }
-                default:
-                    results.push({ action: String(actionType), success: false, error: 'unknown action' });
+            }
+            catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                results.push({ action: a.action, success: false, error: message });
             }
         }
         // Finalize with page state after all actions
@@ -570,7 +668,7 @@ class BrowserClient {
             bodyText = await state.page.evaluate(() => (document.body?.innerText || '').slice(0, 50_000));
         }
         catch { }
-        const screenshot = await this.takeScreenshot(state);
+        const trailingScreenshot = screenshotPaths.length === 0 ? await this.takeScreenshot(state) : undefined;
         // Combine network/console from all sub-actions
         const allNetwork = [...state.network];
         const allConsole = [...state.console];
@@ -578,7 +676,8 @@ class BrowserClient {
             url,
             title,
             text: bodyText,
-            screenshotPath: screenshot,
+            screenshotPath: screenshotPaths.length > 0 ? screenshotPaths[screenshotPaths.length - 1] : trailingScreenshot,
+            screenshotPaths: screenshotPaths.length > 1 ? screenshotPaths : undefined,
             network: allNetwork,
             console: allConsole,
             actions: results,

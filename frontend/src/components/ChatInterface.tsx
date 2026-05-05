@@ -345,6 +345,104 @@ function getChatNameFromQuery(query: string): string {
     : normalized;
 }
 
+interface ScreenshotFrame {
+  url: string;
+  label: string;
+}
+
+function ScreenshotSequence({ frames }: { frames: ScreenshotFrame[] }) {
+  const [currentIdx, setCurrentIdx] = useState(0);
+  const [playing, setPlaying] = useState(true);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const FPS = 4;
+  const intervalMs = 1000 / FPS + 100;
+
+  useEffect(() => {
+    if (playing) {
+      intervalRef.current = setInterval(() => {
+        setCurrentIdx((prev) => (prev + 1) % frames.length);
+      }, intervalMs);
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [playing, frames.length, intervalMs]);
+
+  useEffect(() => {
+    if (playing) {
+      setCurrentIdx(0);
+    }
+  }, [playing]);
+
+  if (frames.length === 0) return null;
+
+  return (
+    <div className="mt-2 w-full">
+      <div className="relative w-full overflow-hidden rounded-lg border border-white/10 bg-black/30">
+        <img
+          src={frames[currentIdx].url}
+          alt={frames[currentIdx].label}
+          className="block h-auto w-full object-contain"
+        />
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
+        <button
+          onClick={() => setPlaying(!playing)}
+          className="flex h-7 w-7 items-center justify-center rounded bg-white/10 text-xs text-zinc-300 hover:bg-white/20"
+          title={playing ? 'Pause' : 'Play'}
+        >
+          {playing ? '⏸' : '▶'}
+        </button>
+        <button
+          onClick={() => { setPlaying(false); setCurrentIdx(0); }}
+          className="h-7 rounded bg-white/10 px-2.5 text-xs text-zinc-300 hover:bg-white/20"
+          title="Reset"
+        >
+          Reset
+        </button>
+        <div className="flex-1" />
+        <div className="flex gap-1">
+          {frames.map((_, idx) => (
+            <button
+              key={idx}
+              onClick={() => { setPlaying(false); setCurrentIdx(idx); }}
+              className={`h-1.5 w-6 rounded-full transition-all ${
+                idx === currentIdx ? 'bg-blue-400' : 'bg-white/20 hover:bg-white/30'
+              }`}
+              title={`Frame ${idx + 1}`}
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BrowserToolOutput({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setExpanded((value) => !value);
+        }}
+        className="rounded-md border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/5"
+      >
+        {expanded ? 'Hide full output' : 'Show full output'}
+      </button>
+      {expanded && (
+        <div className="mt-2 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
+          <pre className="whitespace-pre-wrap break-words">{text}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onModelChange, onChatNameChange, showStats }: ChatInterfaceProps) {
   const { t } = useTranslation();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -387,9 +485,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const scrollContentRef = useRef<HTMLDivElement>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
   const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const distanceFromBottomRef = useRef(0);
+  const stickToBottomRef = useRef(true);
   const toolPickerRef = useRef<HTMLDivElement>(null);
   
   // Refs for socket event handlers to avoid re-registering callbacks
@@ -455,30 +555,29 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   // Handle scroll events - use ref to avoid re-renders
   const handleScroll = useCallback(() => {
     if (!scrollContainerRef.current) return;
-    
+
     const scrollTop = scrollContainerRef.current.scrollTop;
     const viewportHeight = scrollContainerRef.current.clientHeight;
     const scrollHeight = scrollContainerRef.current.scrollHeight;
-    
-    // Calculate if we should show jump to bottom button
+
     distanceFromBottomRef.current = scrollHeight - scrollTop - viewportHeight;
-    
-    // Directly manipulate DOM to avoid re-render
+    stickToBottomRef.current = distanceFromBottomRef.current < SCROLL_THRESHOLD;
+
     if (jumpButtonRef.current) {
-      jumpButtonRef.current.style.display = distanceFromBottomRef.current > SCROLL_THRESHOLD ? 'flex' : 'none';
+      jumpButtonRef.current.style.display = stickToBottomRef.current ? 'none' : 'flex';
     }
   }, []);
 
   // Jump to bottom function
   const jumpToBottom = useCallback(() => {
     if (!scrollContainerRef.current) return;
-    
+
     scrollContainerRef.current.scrollTo({
       top: scrollContainerRef.current.scrollHeight,
       behavior: 'smooth'
     });
-    
-    // Hide button after jumping
+
+    stickToBottomRef.current = true;
     if (jumpButtonRef.current) {
       jumpButtonRef.current.style.display = 'none';
     }
@@ -1095,21 +1194,25 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
   }, [chatId, searchParams]);
 
-  // Auto-scroll to bottom on new messages and live agent updates (only if already near bottom)
+  // Auto-scroll: stick to bottom whenever the trace content grows (state updates,
+  // streaming chunks, async screenshot loads). Stickiness is broken only by
+  // genuine user scroll-up events (handleScroll), so growth alone never strands us.
   useEffect(() => {
-    if (!scrollContainerRef.current) return;
-    const isNearBottom = distanceFromBottomRef.current < SCROLL_THRESHOLD;
-    
-    if (isNearBottom) {
-      requestAnimationFrame(() => {
-        if (!scrollContainerRef.current) return;
-        scrollContainerRef.current.scrollTo({ top: scrollContainerRef.current.scrollHeight, behavior: 'smooth' });
-        if (jumpButtonRef.current) {
-          jumpButtonRef.current.style.display = 'none';
-        }
-      });
-    }
-  }, [messages, agentRuns]);
+    const container = scrollContainerRef.current;
+    const content = scrollContentRef.current;
+    if (!container || !content) return;
+
+    const stickIfNeeded = () => {
+      if (!stickToBottomRef.current) return;
+      container.scrollTop = container.scrollHeight;
+      if (jumpButtonRef.current) jumpButtonRef.current.style.display = 'none';
+    };
+
+    const observer = new ResizeObserver(stickIfNeeded);
+    observer.observe(content);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   // Update refs when state changes
   useEffect(() => {
@@ -1554,62 +1657,78 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
   const renderObservationContent = (content: string) => {
     const trimmed = content.trim();
-    const parsedJson = tryParseJson(trimmed);
+    const { attachments, rest } = extractAttachmentsMarker(trimmed);
+
+    const parsedJson = tryParseJson(rest.trim());
 
     if (parsedJson) {
-      return renderStructuredValue(parsedJson);
-    }
-
-    const searchResultPattern = /^\d+\.\s/m.test(trimmed) && /URL:\s+/m.test(trimmed);
-    if (searchResultPattern) {
-      const chunks = trimmed.split(/\n\s*\n/).filter(Boolean);
       return (
-        <div className="mt-3 space-y-3">
-          {chunks.map((chunk, index) => {
-            const lines = chunk.split('\n');
-            const heading = lines[0] ?? '';
-            const urlLine = lines.find((line) => line.trim().startsWith('URL:'));
-            const contentLine = lines.find((line) => line.trim().startsWith('Content:'));
-            return (
-              <div key={`${heading}-${index}`} className="rounded-xl border border-white/5 bg-black/20 p-3">
-                <div className="text-sm font-medium text-zinc-100">{heading.replace(/^\d+\.\s*/, '')}</div>
-                {urlLine && <div className="mt-1 text-xs text-brand">{urlLine.replace(/^URL:\s*/, '').trim()}</div>}
-                {contentLine && <div className="mt-2 text-xs leading-5 text-zinc-400">{contentLine.replace(/^Content:\s*/, '').trim()}</div>}
-              </div>
-            );
-          })}
-        </div>
+        <>
+          {renderStructuredValue(parsedJson)}
+          {renderAttachments(attachments)}
+        </>
       );
     }
 
-    const prefixedBlock = trimmed.match(/^(Contents of|File contents of|Result:|Tool result:|Successfully .+?:?|Directory .+? is empty\.|Awaiting user approval.+?|Tool execution denied.+?)([\s\S]*)$/i);
+    const searchResultPattern = /^\d+\.\s/m.test(rest.trim()) && /URL:\s+/m.test(rest.trim());
+    if (searchResultPattern) {
+      const chunks = rest.trim().split(/\n\s*\n/).filter(Boolean);
+      return (
+        <>
+          <div className="mt-3 space-y-3">
+            {chunks.map((chunk, index) => {
+              const lines = chunk.split('\n');
+              const heading = lines[0] ?? '';
+              const urlLine = lines.find((line) => line.trim().startsWith('URL:'));
+              const contentLine = lines.find((line) => line.trim().startsWith('Content:'));
+              return (
+                <div key={`${heading}-${index}`} className="rounded-xl border border-white/5 bg-black/20 p-3">
+                  <div className="text-sm font-medium text-zinc-100">{heading.replace(/^\d+\.\s*/, '')}</div>
+                  {urlLine && <div className="mt-1 text-xs text-brand">{urlLine.replace(/^URL:\s*/, '').trim()}</div>}
+                  {contentLine && <div className="mt-2 text-xs leading-5 text-zinc-400">{contentLine.replace(/^Content:\s*/, '').trim()}</div>}
+                </div>
+              );
+            })}
+          </div>
+          {renderAttachments(attachments)}
+        </>
+      );
+    }
+
+    const prefixedBlock = rest.trim().match(/^(Contents of|File contents of|Result:|Tool result:|Successfully .+?:?|Directory .+? is empty\.|Awaiting user approval.+?|Tool execution denied.+?)([\s\S]*)$/i);
     if (prefixedBlock) {
       const heading = prefixedBlock[1].trim();
-      const rest = prefixedBlock[2].trim();
+      const body = prefixedBlock[2].trim();
       return (
-        <div className="mt-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
-          <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
-            {heading}
-          </div>
-          {rest ? (
-            <div className="mt-2 text-sm text-zinc-300">
-              <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
-                {rest}
-              </ReactMarkdown>
+        <>
+          <div className="mt-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
+            <div className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">
+              {heading}
             </div>
-          ) : null}
-        </div>
+            {body ? (
+              <div className="mt-2 text-sm text-zinc-300">
+                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+                  {body}
+                </ReactMarkdown>
+              </div>
+            ) : null}
+          </div>
+          {renderAttachments(attachments)}
+        </>
       );
     }
 
     return (
-      <div className="mt-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
-        <div className="text-sm prose prose-invert max-w-none">
-          <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
-            {trimmed}
-          </ReactMarkdown>
+      <>
+        <div className="mt-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
+          <div className="text-sm prose prose-invert max-w-none">
+            <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+              {rest.trim()}
+            </ReactMarkdown>
+          </div>
         </div>
-      </div>
+        {renderAttachments(attachments)}
+      </>
     );
   };
 
@@ -1910,29 +2029,64 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       const sep = url.includes('?') ? '&' : '?';
       return `${url}${sep}token=${encodeURIComponent(token)}`;
     };
+
+    const isScreenshotSequence = attachments.length >= 2 &&
+      attachments.every(a => a.mime === 'image/png' && a.filename && a.filename.startsWith('frame_'));
+
+    if (isScreenshotSequence) {
+      const frames = attachments.map((att, idx) => ({
+        url: decorate(att.url),
+        label: att.filename?.replace('.png', '') || `Frame ${idx + 1}`,
+      }));
+      return <ScreenshotSequence frames={frames} />;
+    }
+
+    const images = attachments.filter((a) => a.mime.startsWith('image/'));
+    const nonImages = attachments.filter((a) => !a.mime.startsWith('image/'));
+
     return (
-      <div className="mt-2 flex flex-wrap gap-2">
-        {attachments.map((att, idx) => {
+      <div className="mt-2 w-full space-y-2">
+        {images.map((att, idx) => {
           const url = decorate(att.url);
-          const isImage = att.mime.startsWith('image/');
-          if (isImage) {
-            return (
-              <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded border border-white/10 bg-black/30">
-                <img src={url} alt={att.filename || 'screenshot'} className="max-h-64 max-w-full object-contain" />
-              </a>
-            );
-          }
           return (
-            <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="rounded border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-zinc-300 hover:border-white/30">
-              {att.filename || att.url}
+            <a
+              key={`img-${idx}`}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block w-full overflow-hidden rounded-lg border border-white/10 bg-black/30"
+            >
+              <img
+                src={url}
+                alt={att.filename || 'screenshot'}
+                className="block h-auto w-full object-contain"
+              />
             </a>
           );
         })}
+        {nonImages.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {nonImages.map((att, idx) => {
+              const url = decorate(att.url);
+              return (
+                <a
+                  key={`file-${idx}`}
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-zinc-300 hover:border-white/30"
+                >
+                  {att.filename || att.url}
+                </a>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
 
-  const renderTerminalOutput = (output?: string, type?: AgentTerminalEntry['type']) => {
+  const renderTerminalOutput = (output?: string, type?: AgentTerminalEntry['type'], title?: string) => {
     if (!output) return null;
     const { attachments, rest } = extractAttachmentsMarker(output);
 
@@ -1942,6 +2096,16 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       .join('\n')
       .trimEnd();
     if (!normalized && attachments.length === 0) return null;
+
+    if (title === 'browser') {
+      return (
+        <>
+          {renderAttachments(attachments)}
+          {normalized && <BrowserToolOutput text={normalized} />}
+        </>
+      );
+    }
+
     return (
       <>
         {normalized && <TerminalOutput normalized={normalized} type={type} />}
@@ -1995,7 +2159,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               .join('\n')}
           </div>
         )}
-        {renderTerminalOutput(entry.output, entry.type)}
+        {renderTerminalOutput(entry.output, entry.type, entry.title)}
       </div>
     );
   };
@@ -2679,7 +2843,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           </div>
         ) : (
           <>
-            <div className="space-y-4 max-w-3xl mx-auto">
+            <div ref={scrollContentRef} className="space-y-4 max-w-3xl mx-auto">
               {renderedMessages}
             </div>
             <div ref={messagesEndRef} />

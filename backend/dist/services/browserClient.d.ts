@@ -48,6 +48,7 @@ export interface BrowserSessionResult {
     text: string;
     html?: string;
     screenshotPath?: string;
+    screenshotPaths?: string[];
     network: BrowserNetworkEntry[];
     console: BrowserConsoleEntry[];
     error?: string;
@@ -55,8 +56,58 @@ export interface BrowserSessionResult {
         action: string;
         success: boolean;
         error?: string;
+        result?: string;
     }>;
 }
+export type BrowserSubAction = {
+    action: 'click';
+    selector: string;
+} | {
+    action: 'type';
+    selector: string;
+    text: string;
+    submit?: boolean;
+} | {
+    action: 'scroll';
+    scroll_y?: number;
+} | {
+    action: 'wait';
+    ms?: number;
+} | {
+    action: 'select';
+    selector: string;
+    value: string;
+} | {
+    action: 'screenshot';
+    caption?: string;
+} | {
+    action: 'press';
+    key: string;
+    selector?: string;
+} | {
+    action: 'hover';
+    selector: string;
+} | {
+    action: 'focus';
+    selector: string;
+} | {
+    action: 'clear';
+    selector: string;
+} | {
+    action: 'evaluate';
+    script: string;
+} | {
+    action: 'back';
+} | {
+    action: 'forward';
+} | {
+    action: 'reload';
+} | {
+    action: 'wait_for';
+    selector: string;
+    timeout_ms?: number;
+    hidden?: boolean;
+};
 export declare class BrowserClient {
     private browser;
     private turndown;
@@ -122,23 +173,6 @@ export declare class BrowserClient {
     }): Promise<BrowserSessionResult>;
     sessionScroll(sessionId: string, deltaY: number): Promise<BrowserSessionResult>;
     closeSession(sessionId: string): Promise<void>;
-    sessionActions(sessionId: string, actions: Array<{
-        action: 'click';
-        selector: string;
-    } | {
-        action: 'type';
-        selector: string;
-        text: string;
-    } | {
-        action: 'scroll';
-        scroll_y?: number;
-    } | {
-        action: 'wait';
-        ms?: number;
-    } | {
-        action: 'select';
-        selector: string;
-        value: string;
-    }>): Promise<BrowserSessionResult>;
+    sessionActions(sessionId: string, actions: BrowserSubAction[], captureScreenshots?: boolean): Promise<BrowserSessionResult>;
 }
 //# sourceMappingURL=browserClient.d.ts.map
