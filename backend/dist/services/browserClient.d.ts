@@ -46,10 +46,16 @@ export interface BrowserSessionResult {
     url: string;
     title: string;
     text: string;
+    html?: string;
     screenshotPath?: string;
     network: BrowserNetworkEntry[];
     console: BrowserConsoleEntry[];
     error?: string;
+    actions?: Array<{
+        action: string;
+        success: boolean;
+        error?: string;
+    }>;
 }
 export declare class BrowserClient {
     private browser;
@@ -116,5 +122,23 @@ export declare class BrowserClient {
     }): Promise<BrowserSessionResult>;
     sessionScroll(sessionId: string, deltaY: number): Promise<BrowserSessionResult>;
     closeSession(sessionId: string): Promise<void>;
+    sessionActions(sessionId: string, actions: Array<{
+        action: 'click';
+        selector: string;
+    } | {
+        action: 'type';
+        selector: string;
+        text: string;
+    } | {
+        action: 'scroll';
+        scroll_y?: number;
+    } | {
+        action: 'wait';
+        ms?: number;
+    } | {
+        action: 'select';
+        selector: string;
+        value: string;
+    }>): Promise<BrowserSessionResult>;
 }
 //# sourceMappingURL=browserClient.d.ts.map

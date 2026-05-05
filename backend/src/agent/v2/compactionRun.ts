@@ -60,7 +60,7 @@ export interface CompactionRunResult {
 }
 
 export interface CompactionRunner {
-  shouldCompact(messages: WithParts[]): boolean;
+  shouldCompact(messages: WithParts[], context: CompactionContext): boolean;
   run(messages: WithParts[], context: CompactionContext): Promise<CompactionRunResult>;
 }
 
@@ -129,18 +129,16 @@ export class LlmCompactionRunner implements CompactionRunner {
     private readonly options: { model?: string; maxOutputTokens?: number } = {}
   ) {}
 
-  shouldCompact(messages: WithParts[]): boolean {
-    // Mirror opencode: trigger when the last assistant's tokens exceed `usable`.
+  shouldCompact(messages: WithParts[], context: CompactionContext): boolean {
+    const { cfg, model } = context;
+    if (model.context === 0) return false;
+    // If we just compacted, don't do it again immediately.
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.info.role !== 'assistant') continue;
       const a = msg.info as AssistantMessage;
-      if (a.summary) return false; // we just compacted; no point doing it again immediately
-      return isOverflow({
-        cfg: { compaction: { auto: true } },
-        tokens: a.tokens,
-        model: { context: 128000, maxOutputTokens: this.options.maxOutputTokens ?? 8000 },
-      });
+      if (a.summary) return false;
+      return isOverflow({ cfg, tokens: a.tokens, model });
     }
     return false;
   }

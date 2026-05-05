@@ -24,8 +24,8 @@ import {
   type SubagentRequest,
   type SubagentLaunchResult,
 } from './tools';
-import { CompactionRunner, LlmCompactionRunner } from './compactionRun';
-import { CompactionConfig, ModelLimits } from './tokenBudget';
+import { CompactionRunner, LlmCompactionRunner, CompactionContext } from './compactionRun';
+import { CompactionConfig, ModelLimits, usable } from './tokenBudget';
 import { projectPartsToSteps, findFinalAnswer } from './partProjection';
 import type { AgentStep, ToolApprovalRequest, ToolApprovalResponse } from '../ReActAgent';
 
@@ -161,19 +161,21 @@ export class SshAgentRunner {
         const messages = await this.sessions.listMessagesWithParts(this.options.sessionId);
 
         // Step 3: check compaction. Decision uses the post-filter view's last
-        // assistant tokens; we let the compaction runner judge.
-        if (compactionRunner.shouldCompact(messages)) {
+        // assistant tokens; we let the compaction runner judge with the
+        // user's autoCompactThreshold from settings.
+        const compactionContext: CompactionContext = {
+          sessionId: this.options.sessionId,
+          agent: this.options.agent,
+          modelId: this.options.modelID,
+          providerID: this.options.providerID,
+          cwd: this.options.cwd,
+          root: this.options.root,
+          cfg,
+          model: modelLimits,
+        };
+        if (compactionRunner.shouldCompact(messages, compactionContext)) {
           this.compactionPending = true;
-          await compactionRunner.run(messages, {
-            sessionId: this.options.sessionId,
-            agent: this.options.agent,
-            modelId: this.options.modelID,
-            providerID: this.options.providerID,
-            cwd: this.options.cwd,
-            root: this.options.root,
-            cfg,
-            model: modelLimits,
-          });
+          await compactionRunner.run(messages, compactionContext);
           this.compactionPending = false;
           await this.emitProjection(); // surface the compaction marker to the UI
           continue;
@@ -209,8 +211,23 @@ export class SshAgentRunner {
           tasks,
           now: new Date(),
         });
-        if (dynamicState) {
-          llmMessages.push(dynamicState);
+      if (dynamicState) {
+           llmMessages.push(dynamicState);
+         }
+
+        // Pre-send check: count the full prompt tokens and trigger compaction
+        // if the total exceeds the user's threshold. This catches cases where
+        // the last assistant message is small but the accumulated history +
+        // tool definitions push the prompt over context.
+        const thresholdTokens = usable({ cfg, model: modelLimits });
+        const estimatedPromptTokens = await this.llama.countChatTokens(llmMessages);
+        if (estimatedPromptTokens >= thresholdTokens) {
+          console.log(`[sshAgent] prompt tokens ${estimatedPromptTokens} >= threshold ${thresholdTokens}, triggering compaction`);
+          this.compactionPending = true;
+          await compactionRunner.run(refreshed, compactionContext);
+          this.compactionPending = false;
+          await this.emitProjection();
+          continue;
         }
 
         const toolDefs = getSshAgentToolDefinitions();

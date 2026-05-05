@@ -245,6 +245,8 @@ function workspaceBlock(workspace?: WorkspaceConfig): string {
     `- After bringing a web app up, ALWAYS verify it with \`browser visit ${hostUrl}:<port>\` and inspect the screenshot, page text, network entries (look for non-2xx responses), and console messages.`,
     '- A successful `curl` is necessary but not sufficient. Pages can return 200 with broken hydration, missing assets, or runtime JS errors only visible in a real browser.',
     '- For UIs that depend on user interaction, follow up with `browser click`, `browser type`, and `browser scroll` to exercise the golden path before declaring the task done.',
+    '- For `<select>` dropdown menus, use `browser select` with the selector of the `<select>` element and the `value` of the option to pick — do NOT try to click the dropdown and then click an option (headless Puppeteer cannot render native dropdowns). Use `browser actions` with a batch of sub-actions for sequences of interactions.',
+    '- When performing a sequence of browser interactions (e.g. click → type → click → scroll), use `browser actions` with a batch of sub-actions in a single call instead of separate calls. This avoids an LLM round-trip between each step and is significantly faster.',
     '- If the browser visit returns a screenshot or console errors, treat that as the source of truth. Fix any console/network errors you see before reporting success.',
   ].join('\n');
 }

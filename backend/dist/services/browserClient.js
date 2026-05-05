@@ -348,11 +348,17 @@ class BrowserClient {
             bodyText = await state.page.evaluate(() => (document.body?.innerText || '').slice(0, 50_000));
         }
         catch { }
+        let html = '';
+        try {
+            html = (await state.page.evaluate(() => document.documentElement?.outerHTML || '')).slice(0, 80_000);
+        }
+        catch { }
         const screenshot = await this.takeScreenshot(state);
         return {
             url,
             title,
             text: bodyText,
+            html,
             screenshotPath: screenshot,
             network: [...state.network],
             console: [...state.console],
@@ -464,6 +470,119 @@ class BrowserClient {
         }
         catch { }
         this.sessions.delete(sessionId);
+    }
+    // ── Batch actions — execute multiple browser steps in one call ──────────────
+    async sessionActions(sessionId, actions) {
+        this.cleanupIdleSessions();
+        const state = await this.ensureSession(sessionId);
+        const results = [];
+        for (const a of actions) {
+            const actionType = a.action;
+            switch (actionType) {
+                case 'click': {
+                    const clickAction = a;
+                    try {
+                        await state.page.waitForSelector(clickAction.selector, { timeout: 10_000 });
+                        await state.page.click(clickAction.selector);
+                        await new Promise((resolve) => setTimeout(resolve, 500));
+                        results.push({ action: `click ${clickAction.selector}`, success: true });
+                    }
+                    catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        results.push({ action: `click ${clickAction.selector}`, success: false, error: message });
+                    }
+                    break;
+                }
+                case 'type': {
+                    const typeAction = a;
+                    try {
+                        await state.page.waitForSelector(typeAction.selector, { timeout: 10_000 });
+                        await state.page.click(typeAction.selector, { clickCount: 3 });
+                        await state.page.type(typeAction.selector, typeAction.text, { delay: 5 });
+                        await new Promise((resolve) => setTimeout(resolve, 300));
+                        results.push({ action: `type ${typeAction.selector}`, success: true });
+                    }
+                    catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        results.push({ action: `type ${typeAction.selector}`, success: false, error: message });
+                    }
+                    break;
+                }
+                case 'scroll': {
+                    const scrollAction = a;
+                    try {
+                        const deltaY = typeof scrollAction.scroll_y === 'number' ? scrollAction.scroll_y : 600;
+                        await state.page.evaluate((y) => window.scrollBy({ top: y, behavior: 'instant' }), deltaY);
+                        await new Promise((resolve) => setTimeout(resolve, 200));
+                        results.push({ action: 'scroll', success: true });
+                    }
+                    catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        results.push({ action: 'scroll', success: false, error: message });
+                    }
+                    break;
+                }
+                case 'wait': {
+                    const waitAction = a;
+                    const ms = typeof waitAction.ms === 'number' ? waitAction.ms : 500;
+                    await new Promise((resolve) => setTimeout(resolve, ms));
+                    results.push({ action: `wait ${ms}ms`, success: true });
+                    break;
+                }
+                case 'select': {
+                    const selectAction = a;
+                    try {
+                        await state.page.waitForSelector(selectAction.selector, { timeout: 10_000 });
+                        await state.page.evaluate(({ sel, val }) => {
+                            const el = document.querySelector(sel);
+                            if (!el || el.tagName !== 'SELECT')
+                                return `Element is not a <select>: ${sel}`;
+                            el.value = val;
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            return null;
+                        }, { sel: selectAction.selector, val: selectAction.value });
+                        results.push({ action: `select ${selectAction.selector} → ${selectAction.value}`, success: true });
+                    }
+                    catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        results.push({ action: `select ${selectAction.selector}`, success: false, error: message });
+                    }
+                    break;
+                }
+                default:
+                    results.push({ action: String(actionType), success: false, error: 'unknown action' });
+            }
+        }
+        // Finalize with page state after all actions
+        let url = '';
+        try {
+            url = state.page.url();
+        }
+        catch { }
+        let title = '';
+        try {
+            title = await state.page.title();
+        }
+        catch { }
+        let bodyText = '';
+        try {
+            bodyText = await state.page.evaluate(() => (document.body?.innerText || '').slice(0, 50_000));
+        }
+        catch { }
+        const screenshot = await this.takeScreenshot(state);
+        // Combine network/console from all sub-actions
+        const allNetwork = [...state.network];
+        const allConsole = [...state.console];
+        return {
+            url,
+            title,
+            text: bodyText,
+            screenshotPath: screenshot,
+            network: allNetwork,
+            console: allConsole,
+            actions: results,
+        };
     }
 }
 exports.BrowserClient = BrowserClient;
