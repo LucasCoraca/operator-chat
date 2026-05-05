@@ -6,12 +6,21 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.BrowserClient = void 0;
 const puppeteer_1 = __importDefault(require("puppeteer"));
 const turndown_1 = __importDefault(require("turndown"));
+const fs_1 = __importDefault(require("fs"));
+const path_1 = __importDefault(require("path"));
+const crypto_1 = __importDefault(require("crypto"));
+const SCREENSHOT_DIR = '/tmp/operatorchat';
+const NETWORK_BUFFER_MAX = 200;
+const CONSOLE_BUFFER_MAX = 200;
+const SESSION_IDLE_MS = 10 * 60 * 1000;
 class BrowserClient {
     browser = null;
     turndown;
     MAX_TOKENS = 4000;
     pageCache = new Map();
     CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+    // Per-session interactive pages (for the SSH agent's `browser` tool).
+    sessions = new Map();
     constructor() {
         this.turndown = new turndown_1.default({
             headingStyle: 'atx',
@@ -218,6 +227,243 @@ class BrowserClient {
         markdown = markdown.replace(/\[Home\]/gi, '');
         markdown = markdown.replace(/\[Menu\]/gi, '');
         return markdown.trim();
+    }
+    // ── Interactive session API used by the SSH agent's `browser` tool ──────────
+    // Each session keeps a single Page so visit → click → type → scroll all hit
+    // the same context. Network requests and console messages are buffered into
+    // ring buffers reset on every action; the action's return includes both
+    // buffers so the LLM can correlate cause and effect.
+    async ensureSession(sessionId) {
+        await this.initialize();
+        if (!this.browser)
+            throw new Error('Browser not initialized');
+        const existing = this.sessions.get(sessionId);
+        if (existing && !existing.page.isClosed()) {
+            existing.lastUsed = Date.now();
+            return existing;
+        }
+        if (existing)
+            this.sessions.delete(sessionId);
+        const page = await this.browser.newPage();
+        await page.setViewport({ width: 1280, height: 800 });
+        await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36');
+        const state = {
+            page,
+            network: [],
+            console: [],
+            pendingRequests: new Map(),
+            lastUsed: Date.now(),
+        };
+        page.on('request', (req) => {
+            const id = req._requestId || `${req.method()} ${req.url()}`;
+            const entry = {
+                method: req.method(),
+                url: req.url(),
+                startedAt: Date.now(),
+            };
+            state.pendingRequests.set(id, entry);
+        });
+        page.on('response', (res) => {
+            const req = res.request();
+            const id = req._requestId || `${req.method()} ${req.url()}`;
+            const entry = state.pendingRequests.get(id);
+            if (entry) {
+                entry.status = res.status();
+                entry.statusText = res.statusText();
+                entry.durationMs = Date.now() - entry.startedAt;
+            }
+            const finalEntry = entry || {
+                method: req.method(),
+                url: req.url(),
+                status: res.status(),
+                statusText: res.statusText(),
+                startedAt: Date.now(),
+            };
+            state.network.push(finalEntry);
+            if (state.network.length > NETWORK_BUFFER_MAX)
+                state.network.shift();
+            state.pendingRequests.delete(id);
+        });
+        page.on('requestfailed', (req) => {
+            const id = req._requestId || `${req.method()} ${req.url()}`;
+            const entry = state.pendingRequests.get(id) || {
+                method: req.method(),
+                url: req.url(),
+                startedAt: Date.now(),
+            };
+            entry.statusText = req.failure()?.errorText || 'failed';
+            state.network.push(entry);
+            if (state.network.length > NETWORK_BUFFER_MAX)
+                state.network.shift();
+            state.pendingRequests.delete(id);
+        });
+        page.on('console', (msg) => {
+            state.console.push({ type: msg.type(), text: msg.text(), at: Date.now() });
+            if (state.console.length > CONSOLE_BUFFER_MAX)
+                state.console.shift();
+        });
+        page.on('pageerror', (err) => {
+            const message = err instanceof Error ? err.message : String(err);
+            state.console.push({ type: 'pageerror', text: message, at: Date.now() });
+            if (state.console.length > CONSOLE_BUFFER_MAX)
+                state.console.shift();
+        });
+        this.sessions.set(sessionId, state);
+        return state;
+    }
+    cleanupIdleSessions() {
+        const now = Date.now();
+        for (const [id, state] of this.sessions.entries()) {
+            if (now - state.lastUsed > SESSION_IDLE_MS) {
+                state.page.close().catch(() => { });
+                this.sessions.delete(id);
+            }
+        }
+    }
+    async takeScreenshot(state) {
+        try {
+            fs_1.default.mkdirSync(SCREENSHOT_DIR, { recursive: true });
+            const filename = `screenshot_${Date.now()}_${crypto_1.default.randomBytes(3).toString('hex')}.png`;
+            const fullPath = path_1.default.join(SCREENSHOT_DIR, filename);
+            await state.page.screenshot({ path: fullPath, fullPage: false });
+            return fullPath;
+        }
+        catch {
+            return undefined;
+        }
+    }
+    async finalizeAction(state) {
+        let url = '';
+        try {
+            url = state.page.url();
+        }
+        catch { }
+        let title = '';
+        try {
+            title = await state.page.title();
+        }
+        catch { }
+        let bodyText = '';
+        try {
+            bodyText = await state.page.evaluate(() => (document.body?.innerText || '').slice(0, 50_000));
+        }
+        catch { }
+        const screenshot = await this.takeScreenshot(state);
+        return {
+            url,
+            title,
+            text: bodyText,
+            screenshotPath: screenshot,
+            network: [...state.network],
+            console: [...state.console],
+        };
+    }
+    resetBuffersForAction(state) {
+        // We keep buffers cumulative within a session but expose a copy on each
+        // action. To avoid unbounded growth we cap with NETWORK_BUFFER_MAX above.
+        state.lastUsed = Date.now();
+    }
+    async sessionVisit(sessionId, url, options = {}) {
+        this.cleanupIdleSessions();
+        const state = await this.ensureSession(sessionId);
+        this.resetBuffersForAction(state);
+        try {
+            await state.page.goto(url, { waitUntil: 'networkidle2', timeout: options.timeoutMs ?? 30_000 });
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const result = await this.finalizeAction(state);
+            return { ...result, error: message };
+        }
+        return await this.finalizeAction(state);
+    }
+    async sessionClick(sessionId, selector, options = {}) {
+        const state = this.sessions.get(sessionId);
+        if (!state) {
+            return {
+                url: '',
+                title: '',
+                text: '',
+                network: [],
+                console: [],
+                error: 'No active browser session. Call browser visit first.',
+            };
+        }
+        this.resetBuffersForAction(state);
+        try {
+            await state.page.waitForSelector(selector, { timeout: options.timeoutMs ?? 10_000 });
+            await state.page.click(selector);
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const result = await this.finalizeAction(state);
+            return { ...result, error: message };
+        }
+        return await this.finalizeAction(state);
+    }
+    async sessionType(sessionId, selector, text, options = {}) {
+        const state = this.sessions.get(sessionId);
+        if (!state) {
+            return {
+                url: '',
+                title: '',
+                text: '',
+                network: [],
+                console: [],
+                error: 'No active browser session. Call browser visit first.',
+            };
+        }
+        this.resetBuffersForAction(state);
+        try {
+            await state.page.waitForSelector(selector, { timeout: options.timeoutMs ?? 10_000 });
+            await state.page.click(selector, { clickCount: 3 });
+            await state.page.type(selector, text, { delay: 5 });
+            if (options.submit) {
+                await state.page.keyboard.press('Enter');
+            }
+            await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const result = await this.finalizeAction(state);
+            return { ...result, error: message };
+        }
+        return await this.finalizeAction(state);
+    }
+    async sessionScroll(sessionId, deltaY) {
+        const state = this.sessions.get(sessionId);
+        if (!state) {
+            return {
+                url: '',
+                title: '',
+                text: '',
+                network: [],
+                console: [],
+                error: 'No active browser session. Call browser visit first.',
+            };
+        }
+        this.resetBuffersForAction(state);
+        try {
+            await state.page.evaluate((y) => window.scrollBy({ top: y, behavior: 'instant' }), deltaY);
+            await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const result = await this.finalizeAction(state);
+            return { ...result, error: message };
+        }
+        return await this.finalizeAction(state);
+    }
+    async closeSession(sessionId) {
+        const state = this.sessions.get(sessionId);
+        if (!state)
+            return;
+        try {
+            await state.page.close();
+        }
+        catch { }
+        this.sessions.delete(sessionId);
     }
 }
 exports.BrowserClient = BrowserClient;

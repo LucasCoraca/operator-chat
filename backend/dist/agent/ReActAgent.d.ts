@@ -1,9 +1,10 @@
 import { LlamaClient } from '../services/llamaClient';
 import { ToolRegistry, ChatToolPreference, ToolExecutionPolicy } from '../tools';
 import { WorkspaceConfig } from '../services/workspaceRuntime';
+import { AgentRunTask } from '../repositories/agentRunTaskRepository';
 export type AgentMode = 'research_mode' | 'compose_reply_mode';
 export interface AgentStep {
-    type: 'action' | 'observation' | 'tool_progress' | 'final_answer' | 'mode_transition';
+    type: 'action' | 'observation' | 'tool_progress' | 'final_answer' | 'mode_transition' | 'thought';
     content: string;
     actionName?: string;
     actionArgs?: Record<string, any>;
@@ -64,6 +65,8 @@ export interface AgentCallbacks {
     onPartialFinalAnswer?: (chatId: string, partialContent: string) => void;
     onSharedContextRequest?: (request: AgentContextRequest) => Promise<string | undefined>;
     onContextPressure?: (request: AgentContextPressureRequest) => Promise<string | undefined>;
+    onAgentTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void;
+    onTasksRequest?: (chatId: string, agentRunId: string) => Promise<AgentRunTask[]>;
 }
 export interface AgentContextRequest {
     chatId: string;
@@ -109,7 +112,7 @@ export declare class ReActAgent {
     private resetInvalidTurnState;
     private truncateForPrompt;
     private compactObservationForPrompt;
-    private compactDuplicateReadStepsForPrompt;
+    private applyFileViewReplacements;
     private getStepsForPrompt;
     private isSyntheticSummaryObservation;
     private drainPendingUserMessages;
@@ -124,8 +127,6 @@ export declare class ReActAgent {
     private getToolActionIndexes;
     private getLastObservationAfter;
     private normalizeAgentPath;
-    private getReadKey;
-    private didFileChangeAfterRead;
     private getDuplicateReadObservation;
     private validateComposeReadiness;
     private getLanguageInstruction;

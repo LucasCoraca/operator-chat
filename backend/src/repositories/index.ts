@@ -4,3 +4,5 @@ export { memoryRepository, MemoryRepository, Memory, CreateMemoryInput, UpdateMe
 export { personalityRepository, PersonalityRepository, Personality, CreatePersonalityInput, UpdatePersonalityInput } from './personalityRepository';
 export { settingsRepository, SettingsRepository, Setting } from './settingsRepository';
 export { taskRepository, TaskRepository, ScheduledTask, ScheduledTaskRun, ScheduledTaskScheduleType, ScheduledTaskStatus, ScheduledTaskRunStatus } from './taskRepository';
+export { agentRunTaskRepository, AgentRunTaskRepository, AgentRunTask, AgentRunTaskStatus, AgentRunTaskPriority, CreateAgentRunTaskInput, UpdateAgentRunTaskInput, TodoListItem } from './agentRunTaskRepository';
+export { agentSessionRepository, AgentSessionRepository, AgentSession } from './agentSessionRepository';

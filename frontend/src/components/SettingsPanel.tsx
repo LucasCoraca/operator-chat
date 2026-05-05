@@ -58,18 +58,16 @@ interface ToolPreference {
   autoApprove: boolean;
 }
 
+// SSH agent tools that require user approval before execution. Only these
+// surface in the per-tool auto-approve UI; read/glob/grep/todo/question/invalid
+// run automatically and don't need a setting. These names match the v2 SSH
+// agent tool surface (backend/src/agent/v2/sshTools.ts).
 const agentToolApprovalOptions = [
-  { name: 'list', label: 'List files', description: 'Inspect remote directory contents.' },
-  { name: 'read', label: 'Read files', description: 'Read files from the remote workspace.' },
-  { name: 'glob', label: 'Find paths', description: 'Search remote file paths by pattern.' },
-  { name: 'grep', label: 'Search text', description: 'Search remote file contents.' },
-  { name: 'bash', label: 'Run commands', description: 'Execute shell commands over SSH.' },
-  { name: 'terminal_list', label: 'List terminals', description: 'Inspect managed background terminals.' },
-  { name: 'terminal_read', label: 'Read terminal', description: 'Read output from a background terminal.' },
-  { name: 'terminal_kill', label: 'Kill terminal', description: 'Stop a background terminal process.' },
-  { name: 'write', label: 'Write files', description: 'Create or replace files in the remote workspace.' },
-  { name: 'edit', label: 'Edit files', description: 'Modify existing remote files.' },
-  { name: 'apply_patch', label: 'Apply patches', description: 'Apply structured patches to remote files.' },
+  { name: 'shell', label: 'Run commands', description: 'Execute shell commands over SSH.' },
+  { name: 'write', label: 'Write files', description: 'Create or overwrite files in the remote workspace.' },
+  { name: 'edit', label: 'Edit files', description: 'Modify existing remote files via exact string replacement.' },
+  { name: 'browser', label: 'Browser actions', description: 'Visit, click, type, and scroll in a headless browser.' },
+  { name: 'task', label: 'Launch subagents', description: 'Start a separate subagent to handle a multi-step task.' },
 ] as const;
 
 interface SettingsPanelProps {

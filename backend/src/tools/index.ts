@@ -7,9 +7,11 @@ import { WorkspaceConfig, WorkspaceRuntimeFactory } from '../services/workspaceR
 import { AgentMemoryService, AgentMemoryKind, agentMemoryContentHash, normalizeMemoryPath } from '../services/agentMemoryService';
 import type { CreateAgentRunRequest } from '../agent/ReActAgent';
 import { taskRepository } from '../repositories/taskRepository';
+import { agentRunTaskRepository, AgentRunTask, AgentRunTaskStatus } from '../repositories/agentRunTaskRepository';
 import { computeNextRun, normalizeDaysOfWeek } from '../services/schedule';
 import { exec } from 'child_process';
 import { promisify } from 'util';
+import { createPatch } from 'diff';
 
 const browserClient = new BrowserClient();
 const execAsync = promisify(exec);
@@ -19,36 +21,30 @@ function quoteShellArg(value: string): string {
 }
 
 function diffPreview(filePath: string, oldContent: string, newContent: string, maxLines = 220): string {
-  const oldLines = oldContent.length > 0 ? oldContent.split('\n') : [];
-  const newLines = newContent.length > 0 ? newContent.split('\n') : [];
-  const max = Math.max(oldLines.length, newLines.length);
-  const lines: string[] = [];
+  // Use a real Myers-based diff via the `diff` package instead of the
+  // previous lockstep-by-index walk that produced nonsense whenever lines
+  // were inserted or removed.
+  const patch = createPatch(filePath, oldContent, newContent, '', '', { context: 3 });
+  const lines = patch.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('---'));
+  const diffText = start >= 0 ? lines.slice(start).join('\n').trimEnd() : patch.trimEnd();
+
+  // Count additions/deletions for the header
   let additions = 0;
   let deletions = 0;
-
-  for (let index = 0; index < max; index++) {
-    if (oldLines[index] === newLines[index]) {
-      continue;
-    }
-    if (oldLines[index] !== undefined) {
-      deletions++;
-      if (lines.length < maxLines) {
-        lines.push(`${String(index + 1).padStart(6, ' ')} - ${oldLines[index]}`);
-      }
-    }
-    if (newLines[index] !== undefined) {
-      additions++;
-      if (lines.length < maxLines) {
-        lines.push(`${String(index + 1).padStart(6, ' ')} + ${newLines[index]}`);
-      }
-    }
+  for (const line of diffText.split('\n')) {
+    if (line.startsWith('+') && !line.startsWith('+++')) additions++;
+    if (line.startsWith('-') && !line.startsWith('---')) deletions++;
   }
+
+  // Truncate to maxLines of diff content
+  const diffLines = diffText.split('\n');
+  const truncated = diffLines.length > maxLines
+    ? [...diffLines.slice(0, maxLines), '[diff preview truncated]']
+    : diffLines;
 
   const header = `• Edited ${filePath} (+${additions} -${deletions})`;
-  if (lines.length >= maxLines) {
-    lines.push('[diff preview truncated]');
-  }
-  return [header, ...lines].join('\n');
+  return [header, ...truncated].join('\n');
 }
 
 function isRemoteWorkspaceContext(context: { workspace?: WorkspaceConfig }): boolean {
@@ -95,7 +91,32 @@ export interface Tool {
   parameters: Record<string, { type: string; description: string; required?: boolean }>;
   policy: ToolExecutionPolicy;
   internal?: boolean;
-  execute: (args: Record<string, any>, context: { sandboxId: string; userId: string; chatId?: string; agentRunId?: string; model?: string; workspace?: WorkspaceConfig; createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>; emitToolProgress?: (content: string) => void; agentMemory?: AgentMemoryService }) => Promise<string>;
+  execute: (args: Record<string, any>, context: { sandboxId: string; userId: string; chatId?: string; agentRunId?: string; model?: string; workspace?: WorkspaceConfig; createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>; emitToolProgress?: (content: string) => void; agentMemory?: AgentMemoryService; emitAgentTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void }) => Promise<string>;
+}
+
+function formatTaskListForObservation(tasks: AgentRunTask[]): string {
+  if (tasks.length === 0) {
+    return 'No tasks yet. Use task_create to add tasks.';
+  }
+  const lines: string[] = [];
+  for (const task of tasks) {
+    const marker =
+      task.status === 'completed' ? '[x]' : task.status === 'in_progress' ? '[~]' : '[ ]';
+    lines.push(`${marker} ${task.id}  ${task.subject}`);
+    if (task.description) {
+      lines.push(`     ${task.description.split('\n').join('\n     ')}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function emitTaskUpdate(
+  context: { chatId?: string; agentRunId?: string; emitAgentTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void }
+): Promise<AgentRunTask[]> {
+  if (!context.chatId || !context.agentRunId) return [];
+  const tasks = await agentRunTaskRepository.listByRun(context.chatId, context.agentRunId);
+  context.emitAgentTasksUpdated?.(context.chatId, context.agentRunId, tasks);
+  return tasks;
 }
 
 export class ToolRegistry {
@@ -210,32 +231,10 @@ export class ToolRegistry {
         }
 
         try {
-          const memory = context.agentMemory || this.agentMemoryService;
-          if (memory && context.chatId) {
-            const normalizedPath = normalizeMemoryPath(filePath, context.workspace);
-            const fileState = await memory.get(
-              { chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId },
-              'file_state',
-              `file:${normalizedPath}`
-            );
-            const fileSummary = await memory.get(
-              { chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId },
-              'file_summary',
-              `file:${normalizedPath}`
-            );
-            const metadata = fileState?.metadata || {};
-            const requestedOffset = args.offset !== undefined ? Number(args.offset) : 1;
-            const requestedLimit = args.limit !== undefined ? Number(args.limit) : undefined;
-            const requestedEnd = requestedLimit ? requestedOffset + requestedLimit - 1 : undefined;
-            const coversRange = metadata.lineStart !== undefined && metadata.lineEnd !== undefined
-              && Number(metadata.lineStart) <= requestedOffset
-              && (!requestedEnd || Number(metadata.lineEnd) >= requestedEnd);
-            const defaultRead = args.offset === undefined && args.limit === undefined;
-            if (fileSummary && (defaultRead || coversRange) && metadata.stale !== true) {
-              return `Memory hit for ${normalizedPath}. This file is already represented in backend-managed memory and has not changed since the last known update.\n\n${fileSummary.content}\n\nUse read with a specific offset/limit only if you need exact lines not covered by this memory, or use grep for targeted lookup.`;
-            }
-          }
-
+          // Note: the previous "memory hit" short-circuit returned a 1600-char summary
+          // for any offset on a file that had been read once, which broke pagination
+          // (the model would loop asking for higher offsets and keep getting line 1-40).
+          // Range-aware deduplication now lives in the agent's fileViewCache layer.
           const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
           const result = await runtime.readFile(filePath, {
             offset: args.offset !== undefined ? Number(args.offset) : undefined,
@@ -440,6 +439,116 @@ export class ToolRegistry {
           });
         }
         return 'Memory checkpoint saved.';
+      },
+    });
+
+    this.tools.set('task_create', {
+      name: 'task_create',
+      internal: true,
+      description: 'Create a new task in the SSH agent run\'s checklist. Use this before starting non-trivial multi-step work to lay out the plan. Each task gets a unique id you will use to mark it in_progress and completed.',
+      parameters: {
+        subject: { type: 'string', description: 'Short imperative task title (e.g., "Add migration for users table")' },
+        description: { type: 'string', description: 'Optional longer description of what this task entails.', required: false },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: [],
+        sandboxPolicy: 'none',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        if (!context.chatId || !context.agentRunId) {
+          return 'task_create is only available inside a spawned SSH agent run.';
+        }
+        const subject = String(args.subject || '').trim();
+        if (!subject) {
+          return 'Error: subject is required';
+        }
+        const description = args.description !== undefined && args.description !== null
+          ? String(args.description).trim() || null
+          : null;
+        const created = await agentRunTaskRepository.create({
+          chatId: context.chatId,
+          agentRunId: context.agentRunId,
+          subject,
+          description,
+        });
+        const tasks = await emitTaskUpdate(context);
+        return `Created task ${created.id}: ${created.subject}\n\nCurrent task list:\n${formatTaskListForObservation(tasks)}`;
+      },
+    });
+
+    this.tools.set('task_update', {
+      name: 'task_update',
+      internal: true,
+      description: 'Update a task\'s status, subject, or description. Mark a task in_progress when you begin working on it, and completed when finished. Status values: pending, in_progress, completed.',
+      parameters: {
+        taskId: { type: 'string', description: 'The task id returned by task_create' },
+        status: { type: 'string', description: 'New status: pending, in_progress, or completed. Optional.', required: false },
+        subject: { type: 'string', description: 'New subject. Optional.', required: false },
+        description: { type: 'string', description: 'New description. Optional.', required: false },
+      },
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: [],
+        sandboxPolicy: 'none',
+        riskLevel: 'low',
+      },
+      execute: async (args, context) => {
+        if (!context.chatId || !context.agentRunId) {
+          return 'task_update is only available inside a spawned SSH agent run.';
+        }
+        const taskId = String(args.taskId || '').trim();
+        if (!taskId) {
+          return 'Error: taskId is required';
+        }
+        const update: { subject?: string; description?: string | null; status?: AgentRunTaskStatus } = {};
+        if (args.subject !== undefined) {
+          update.subject = String(args.subject).trim();
+        }
+        if (args.description !== undefined) {
+          const text = args.description === null ? null : String(args.description).trim();
+          update.description = text || null;
+        }
+        if (args.status !== undefined) {
+          const status = String(args.status).trim() as AgentRunTaskStatus;
+          if (!['pending', 'in_progress', 'completed'].includes(status)) {
+            return 'Error: status must be one of pending, in_progress, completed';
+          }
+          update.status = status;
+        }
+        if (Object.keys(update).length === 0) {
+          return 'Error: at least one of status, subject, or description must be provided';
+        }
+        const updated = await agentRunTaskRepository.update(taskId, context.agentRunId, update);
+        if (!updated) {
+          return `Error: task ${taskId} not found in this agent run.`;
+        }
+        const tasks = await emitTaskUpdate(context);
+        return `Updated task ${updated.id} (${updated.status}): ${updated.subject}\n\nCurrent task list:\n${formatTaskListForObservation(tasks)}`;
+      },
+    });
+
+    this.tools.set('task_list', {
+      name: 'task_list',
+      internal: true,
+      description: 'List all tasks in the SSH agent run\'s checklist with their statuses. Use this to recall your current plan before deciding the next step.',
+      parameters: {},
+      policy: {
+        requiresApproval: false,
+        supportsAutoApprove: true,
+        capabilities: [],
+        sandboxPolicy: 'none',
+        riskLevel: 'low',
+      },
+      execute: async (_args, context) => {
+        if (!context.chatId || !context.agentRunId) {
+          return 'task_list is only available inside a spawned SSH agent run.';
+        }
+        const tasks = await agentRunTaskRepository.listByRun(context.chatId, context.agentRunId);
+        return formatTaskListForObservation(tasks);
       },
     });
 
@@ -1412,7 +1521,7 @@ export class ToolRegistry {
   async executeTool(
     name: string,
     args: Record<string, any>,
-    context: { sandboxId: string; userId: string; chatId?: string; agentRunId?: string; model?: string; workspace?: WorkspaceConfig; createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>; emitToolProgress?: (content: string) => void; agentMemory?: AgentMemoryService },
+    context: { sandboxId: string; userId: string; chatId?: string; agentRunId?: string; model?: string; workspace?: WorkspaceConfig; createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>; emitToolProgress?: (content: string) => void; agentMemory?: AgentMemoryService; emitAgentTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void },
     enabledToolNames?: string[]
   ): Promise<string> {
     const availableTools = this.getFilteredTools(enabledToolNames);

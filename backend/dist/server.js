@@ -25,6 +25,8 @@ const auth_1 = require("./auth");
 const db_1 = require("./db");
 const repositories_1 = require("./repositories");
 const schedule_1 = require("./services/schedule");
+const sshAgentRunner_1 = require("./agent/v2/sshAgentRunner");
+const ids_1 = require("./agent/v2/ids");
 // JWT secret for socket.io
 const JWT_SECRET = process.env.JWT_SECRET || 'operator-chat-secret-key-12345';
 const app = (0, express_1.default)();
@@ -189,6 +191,10 @@ initializeApp().catch(console.error);
 function normalizeToolPreferences(preferences, defaultPreferences) {
     return restrictInternalAgentTools(toolRegistry.mergeWithDefaultPreferences(preferences, defaultPreferences || defaultSettings.ui.defaultToolPreferences));
 }
+// Names of legacy ToolRegistry tools that the chat-side ReActAgent must NOT
+// expose to the chat user. The chat ReActAgent still has these registered (so
+// it can introspect tool defs) — we just keep them disabled in the user's
+// chat tool prefs.
 const AGENT_INTERNAL_TOOL_NAMES = new Set([
     'list',
     'read',
@@ -204,7 +210,23 @@ const AGENT_INTERNAL_TOOL_NAMES = new Set([
     'memory_get',
     'memory_set',
     'memory_checkpoint',
+    'task_create',
+    'task_update',
+    'task_list',
 ]);
+// Names of the v2 SSH agent tools that require user approval per the spec.
+// These are the keys the user's per-tool auto-approve settings are stored under
+// for the SSH agent (UI in SettingsPanel.tsx → Agent workspace section).
+const SSH_AGENT_APPROVAL_TOOL_NAMES = ['shell', 'write', 'edit', 'browser', 'task'];
+// Backwards-compat: when reading user settings, fold legacy tool names onto
+// their v2 equivalents so existing users don't lose their auto-approve choices.
+const LEGACY_APPROVAL_KEY_ALIASES = {
+    bash: 'shell',
+    apply_patch: 'edit',
+    terminal_kill: 'shell',
+    // memory_*, task_* (legacy) had requiresApproval=false in the old set, so no
+    // alias is needed — they were never user-auto-approved anyway.
+};
 function restrictInternalAgentTools(preferences) {
     const next = { ...preferences };
     for (const toolName of AGENT_INTERNAL_TOOL_NAMES) {
@@ -247,8 +269,16 @@ function normalizeRemoteWorkspaceSettings(input) {
     const sourceToolApprovals = source.toolApprovals && typeof source.toolApprovals === 'object'
         ? source.toolApprovals
         : {};
-    const toolApprovals = Array.from(AGENT_INTERNAL_TOOL_NAMES).reduce((acc, toolName) => {
-        acc[toolName] = sourceToolApprovals[toolName] === 'auto-approve' || approvalPolicy === 'auto-approve'
+    // Apply legacy aliases first so a saved `bash: 'auto-approve'` ends up as
+    // `shell: 'auto-approve'` after migration.
+    const aliased = { ...sourceToolApprovals };
+    for (const [legacy, modern] of Object.entries(LEGACY_APPROVAL_KEY_ALIASES)) {
+        if (aliased[modern] === undefined && aliased[legacy] !== undefined) {
+            aliased[modern] = aliased[legacy];
+        }
+    }
+    const toolApprovals = SSH_AGENT_APPROVAL_TOOL_NAMES.reduce((acc, toolName) => {
+        acc[toolName] = aliased[toolName] === 'auto-approve' || approvalPolicy === 'auto-approve'
             ? 'auto-approve'
             : 'ask';
         return acc;
@@ -384,6 +414,23 @@ function normalizeWorkspaceConfig(input) {
 const chatSessions = new Map();
 const pendingChatSaveTimers = new Map();
 const pendingApprovals = new Map();
+// Pending `question` tool calls awaiting a reply via the agent-question-response socket.
+// The full payload is kept so the question can be re-emitted to a reconnecting
+// client (page refresh, network blip) — otherwise the dialog would be lost.
+const pendingQuestions = new Map();
+function clearPendingQuestionsForRun(agentRunId, ignored = true) {
+    for (const [questionId, pending] of pendingQuestions.entries()) {
+        if (pending.payload.agentRunId !== agentRunId)
+            continue;
+        pendingQuestions.delete(questionId);
+        pending.resolve(ignored ? { answer: '', answered: false } : null);
+        io.to(pending.payload.chatId).emit('agent-question-resolved', {
+            chatId: pending.payload.chatId,
+            agentRunId: pending.payload.agentRunId,
+            questionId,
+        });
+    }
+}
 const MAX_PERSISTED_STEP_CONTENT_CHARS = 20000;
 const MAX_PERSISTED_PARTIAL_ANSWER_CHARS = 100000;
 function scheduleChatSave(session, delayMs = 750) {
@@ -1347,26 +1394,76 @@ async function startChatAgentRun(session, userId, request, model, language, sour
         agentRunId: run.id,
     });
     io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-    const agentToolPreferences = buildSpawnedAgentToolPreferences(session.toolPreferences, userSettings.remoteWorkspace);
-    const agent = new ReActAgent_1.ReActAgent(llamaClient, toolRegistry, 15, {
-        onStep: (step) => {
-            run.steps.push(step);
-            run.updatedAt = new Date().toISOString();
-            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-        },
-        onFinalAnswerToken: (token) => {
-            run.finalAnswer = `${run.finalAnswer || ''}${token}`;
+    // Create the v2 agent_session row and seed it with the agent prompt as
+    // the initial UserMessage + TextPart. The runner reads/writes everything
+    // else via agentSessionRepository.
+    const agentSession = await repositories_1.agentSessionRepository.createSession({
+        chatId: session.id,
+        agentRunId: run.id,
+        directory: request.workspaceRoot,
+        title: request.title,
+        agent: 'ssh-agent',
+        model: { providerID: 'llama', modelID: agentModel },
+    });
+    const initialUserMessageId = ids_1.MessageID.ascending();
+    const initialUserMessage = {
+        id: initialUserMessageId,
+        sessionID: agentSession.id,
+        role: 'user',
+        time: { created: Date.now() },
+        agent: 'ssh-agent',
+        model: { providerID: 'llama', modelID: agentModel },
+    };
+    await repositories_1.agentSessionRepository.upsertMessage(initialUserMessage);
+    const initialUserPart = {
+        id: ids_1.PartID.ascending(),
+        sessionID: agentSession.id,
+        messageID: initialUserMessageId,
+        type: 'text',
+        text: agentPrompt,
+    };
+    await repositories_1.agentSessionRepository.upsertPart(initialUserPart);
+    const runner = new sshAgentRunner_1.SshAgentRunner(llamaClient, repositories_1.agentSessionRepository, repositories_1.agentRunTaskRepository, {
+        sessionId: agentSession.id,
+        chatId: session.id,
+        agentRunId: run.id,
+        userId,
+        sandboxId: session.sandboxId,
+        agent: 'ssh-agent',
+        workspace,
+        agentPrompt,
+        modelID: agentModel,
+        providerID: 'llama',
+        cwd: request.workspaceRoot,
+        root: request.workspaceRoot,
+        language,
+        contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+        reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+        autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
+    }, {
+        onPartsUpdated: (steps, finalAnswer) => {
+            run.steps = steps;
+            // Allow null to clear the bubble — intermediate narration lives in
+            // the trace as a `thought` step, not the chat bubble.
+            run.finalAnswer = finalAnswer;
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
             scheduleChatSave(session);
         },
-        onReasoningToken: () => { },
-        onError: (error) => {
-            run.status = 'failed';
-            run.error = error;
-            run.updatedAt = new Date().toISOString();
-            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            scheduleChatSave(session, 0);
+        onStep: () => {
+            // onPartsUpdated already emits the full state. Step events here are
+            // useful for the UI's per-step animation but we keep them silent for
+            // now since the legacy ChatInterface listens to agent-run-updated.
+        },
+        onAssistantToken: () => {
+            // No-op: streamed tokens are persisted as a TextPart at the end of
+            // each iteration. The next emitProjection() decides whether they
+            // belong in the trace (thought step) or the chat bubble (final
+            // answer). Streaming directly into run.finalAnswer would poison the
+            // bubble with intermediate narration that we then have to clear.
+        },
+        onTimings: (timings) => {
+            io.to(sourceSocketChatId).emit('timings', timings);
         },
         onToolApprovalRequest: async (approvalRequest) => {
             const latestSettings = await getUserSettings(userId);
@@ -1374,58 +1471,81 @@ async function startChatAgentRun(session, userId, request, model, language, sour
                 return { approved: true, reason: 'approved' };
             }
             return await new Promise((resolve) => {
-                pendingApprovals.set(approvalRequest.approvalId, { chatId: sourceSocketChatId, request: approvalRequest, resolve });
+                pendingApprovals.set(approvalRequest.approvalId, {
+                    chatId: sourceSocketChatId,
+                    request: approvalRequest,
+                    resolve,
+                });
                 io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
             });
         },
-        onStepSave: async () => {
-            await saveChat(session);
+        onTasksUpdated: (chatId, agentRunId, tasks) => {
+            io.to(sourceSocketChatId).emit('agent-tasks-updated', { chatId, agentRunId, tasks });
         },
-        onSharedContextRequest: async () => buildSharedAgentContextWithMemory(session, workspace, run.id),
-        onContextPressure: async (pressure) => {
-            const context = await compactSharedAgentContext(session, run, pressure.state.steps, agentModel, pressure.tokenEstimate);
-            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            const memoryPacket = await agentMemoryService_1.agentMemoryService.buildContextPacket({
-                chatId: session.id,
-                workspace,
-                agentRunId: run.id,
+        onAskUserQuestion: async (request) => {
+            return await new Promise((resolve) => {
+                const payload = {
+                    chatId: sourceSocketChatId,
+                    agentRunId: run.id,
+                    questionId: request.questionId,
+                    question: request.question,
+                    options: request.options ?? [],
+                    multiple: Boolean(request.multiple),
+                    allowCustomAnswer: Boolean(request.allowCustomAnswer),
+                    timeoutMs: request.timeoutMs,
+                };
+                pendingQuestions.set(request.questionId, { payload, resolve });
+                io.to(sourceSocketChatId).emit('agent-question-required', payload);
+                if (request.timeoutMs && request.timeoutMs > 0) {
+                    setTimeout(() => {
+                        if (pendingQuestions.has(request.questionId)) {
+                            pendingQuestions.delete(request.questionId);
+                            resolve({ answer: '', answered: false });
+                            io.to(sourceSocketChatId).emit('agent-question-resolved', {
+                                chatId: sourceSocketChatId,
+                                agentRunId: run.id,
+                                questionId: request.questionId,
+                            });
+                        }
+                    }, request.timeoutMs);
+                }
             });
-            return memoryPacket.trim() ? `## Backend Managed Memory\n${memoryPacket}\n\n${context}` : context;
         },
-    }, null, language, agentModel, {
-        disableMaxIterations: true,
-        runId: run.id,
-        contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
-        reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
-        autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
-    });
-    runningAgentRuns.set(run.id, { agent, session, run, sourceSocketChatId });
-    void (async () => {
-        try {
-            const result = await agent.run(session.id, agentPrompt, session.sandboxId, userId, [], (await memoryManager.getMemories(userId)).map((memory) => memory.content), agentToolPreferences, { alwaysApprove: false }, workspace);
-            run.steps = result.steps;
-            run.finalAnswer = result.finalAnswer;
-            run.status = run.status === 'cancelled'
-                ? 'cancelled'
-                : result.isComplete
-                    ? 'completed'
-                    : 'failed';
+        onComplete: (finalAnswer) => {
+            // The aggregated answer from the projection is the source of truth.
+            // Fall back to whatever onPartsUpdated set if the runner passes null.
+            run.finalAnswer = finalAnswer ?? run.finalAnswer ?? null;
+            run.status = run.status === 'cancelled' ? 'cancelled' : 'completed';
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            await flushScheduledChatSave(session);
-        }
-        catch (error) {
+            void flushScheduledChatSave(session).catch(console.error);
+        },
+        onError: (error) => {
             if (run.status !== 'cancelled') {
                 run.status = 'failed';
-                run.error = error instanceof Error ? error.message : String(error);
+                run.error = error;
             }
             run.updatedAt = new Date().toISOString();
             io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            await flushScheduledChatSave(session);
+            void flushScheduledChatSave(session).catch(console.error);
+        },
+    });
+    runningAgentRuns.set(run.id, {
+        kind: 'ssh-v2',
+        agent: runner,
+        session,
+        run,
+        sourceSocketChatId,
+        sessionId: agentSession.id,
+    });
+    void (async () => {
+        try {
+            await runner.run();
         }
         finally {
             runningAgentRuns.delete(run.id);
             clearPendingApprovalsForChat(sourceSocketChatId);
+            clearPendingQuestionsForRun(run.id, true);
         }
     })();
     return run.id;
@@ -2139,7 +2259,29 @@ io.on('connection', (socket) => {
             socket.emit('tool-approval-required', pendingApproval);
             console.log(`Re-emitting pending approval ${pendingApproval.approvalId} to socket ${socket.id} for chat ${chatId}`);
         }
+        // Re-emit any pending agent question for this chat so the dialog survives
+        // a page reload or temporary disconnect. The backend kept the resolver
+        // alive on the pendingQuestions map; the client just needs the payload.
+        for (const pending of pendingQuestions.values()) {
+            if (pending.payload.chatId !== chatId)
+                continue;
+            socket.emit('agent-question-required', pending.payload);
+            console.log(`Re-emitting pending question ${pending.payload.questionId} to socket ${socket.id} for chat ${chatId}`);
+        }
         socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
+        void (async () => {
+            for (const run of session.agentRuns) {
+                try {
+                    const tasks = await repositories_1.agentRunTaskRepository.listByRun(chatId, run.id);
+                    if (tasks.length > 0) {
+                        socket.emit('agent-tasks-updated', { chatId, agentRunId: run.id, tasks });
+                    }
+                }
+                catch (error) {
+                    console.error(`Failed to load tasks for agent run ${run.id}:`, error);
+                }
+            }
+        })();
     });
     socket.on('send-message', async (data) => {
         if (!currentUserId) {
@@ -2429,6 +2571,7 @@ io.on('connection', (socket) => {
                 running.run.error = 'Stopped by user.';
                 running.run.updatedAt = new Date().toISOString();
                 io.to(running.sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(running.run));
+                clearPendingQuestionsForRun(runId, true);
                 scheduleChatSave(running.session, 0);
                 stopped = true;
             }
@@ -2461,6 +2604,9 @@ io.on('connection', (socket) => {
             socket.emit('error', { message: 'Running agent not found' });
             return;
         }
+        // A free-form steering message implicitly cancels any pending question for this run
+        // (the spec: "if the user reply instead to the agent the questions are ignored").
+        clearPendingQuestionsForRun(runId, true);
         const accepted = running.agent.addUserMessage(message);
         if (!accepted) {
             socket.emit('error', { message: 'Agent message was empty' });
@@ -2470,8 +2616,64 @@ io.on('connection', (socket) => {
         io.to(running.sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(running.run));
         scheduleChatSave(running.session, 0);
     });
+    socket.on('agent-question-response', (data) => {
+        if (!currentUserId) {
+            socket.emit('error', { message: 'Not authenticated' });
+            return;
+        }
+        const chatId = String(data?.chatId || '').trim();
+        const agentRunId = String(data?.agentRunId || '').trim();
+        const questionId = String(data?.questionId || '').trim();
+        if (!chatId || !agentRunId || !questionId) {
+            socket.emit('error', { message: 'chatId, agentRunId, and questionId are required' });
+            return;
+        }
+        const pending = pendingQuestions.get(questionId);
+        if (!pending || pending.payload.chatId !== chatId || pending.payload.agentRunId !== agentRunId) {
+            socket.emit('error', { message: 'Pending question not found' });
+            return;
+        }
+        pendingQuestions.delete(questionId);
+        pending.resolve({
+            answer: Array.isArray(data.answer) ? data.answer : String(data.answer ?? ''),
+            answered: true,
+        });
+        io.to(chatId).emit('agent-question-resolved', { chatId, agentRunId, questionId });
+    });
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
+    });
+});
+// Static serving for screenshots and tool overflow files written under /tmp/operatorchat
+// by the SSH agent's `browser` tool and outputCap. Filenames are restricted to a safe
+// charset so a compromised tool result can't escape the directory. Auth comes either from
+// the standard Authorization header or a `?token=` query param so <img> tags work.
+app.get('/api/agent-attachments/:filename', (req, res) => {
+    const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+    const token = headerToken || queryToken;
+    if (!token) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    try {
+        jsonwebtoken_1.default.verify(token, JWT_SECRET);
+    }
+    catch {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+    const filename = String(req.params.filename || '');
+    if (!/^[A-Za-z0-9_.-]+$/.test(filename) || filename.includes('..')) {
+        return res.status(400).json({ error: 'Invalid filename' });
+    }
+    const root = '/tmp/operatorchat';
+    const fullPath = path_1.default.resolve(root, filename);
+    if (!fullPath.startsWith(`${root}/`)) {
+        return res.status(400).json({ error: 'Invalid filename' });
+    }
+    fs_1.default.stat(fullPath, (err) => {
+        if (err)
+            return res.status(404).json({ error: 'Not found' });
+        res.sendFile(fullPath);
     });
 });
 // Get available models

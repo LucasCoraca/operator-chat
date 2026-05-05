@@ -12,6 +12,7 @@ import 'katex/dist/katex.min.css';
 import { getAuthHeader } from '../services/auth';
 import { generateUUID } from '../utils/uuid';
 import CodeBlock, { PreBlock } from './CodeBlock';
+import { AgentQuestionDialog, type AgentQuestionPayload } from './AgentQuestionDialog';
 import operatorLogo from '../assets/logo.png';
 
 interface AgentStep {
@@ -54,6 +55,19 @@ interface AgentRun {
   createdAt: string;
   updatedAt: string;
   model?: string;
+}
+
+interface AgentRunTask {
+  id: string;
+  chatId: string;
+  agentRunId: string;
+  subject: string;
+  description: string | null;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
+  priority?: 'high' | 'medium' | 'low';
+  orderIndex: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface AgentTerminalEntry {
@@ -364,7 +378,10 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
   const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
+  const [agentRunTasks, setAgentRunTasks] = useState<Record<string, AgentRunTask[]>>({});
   const [agentSteeringDrafts, setAgentSteeringDrafts] = useState<Record<string, string>>({});
+  // Pending agent `question` tool calls awaiting a user reply.
+  const [agentQuestion, setAgentQuestion] = useState<AgentQuestionPayload | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -739,6 +756,21 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       }
     };
 
+    const handleAgentTasksUpdated = (data: { chatId: string; agentRunId: string; tasks: AgentRunTask[] }) => {
+      if (data.chatId !== chatId) return;
+      setAgentRunTasks((current) => ({ ...current, [data.agentRunId]: data.tasks }));
+    };
+
+    const handleAgentQuestionRequired = (data: AgentQuestionPayload) => {
+      if (data.chatId !== chatId) return;
+      setAgentQuestion(data);
+    };
+
+    const handleAgentQuestionResolved = (data: { chatId: string; agentRunId: string; questionId: string }) => {
+      if (data.chatId !== chatId) return;
+      setAgentQuestion((current) => (current && current.questionId === data.questionId ? null : current));
+    };
+
     const handleStepSaved = (data: { step: AgentStep; allSteps: AgentStep[] }) => {
       // Update current agent steps when a step is saved
       setCurrentAgentSteps(data.allSteps);
@@ -814,6 +846,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     socket.on('tool-preferences-updated', handleToolPreferencesUpdated);
     socket.on('agent-runs', handleAgentRuns);
     socket.on('agent-run-updated', handleAgentRunUpdated);
+    socket.on('agent-tasks-updated', handleAgentTasksUpdated);
+    socket.on('agent-question-required', handleAgentQuestionRequired);
+    socket.on('agent-question-resolved', handleAgentQuestionResolved);
     socket.on('step-saved', handleStepSaved);
 
     // Join the chat room AFTER handlers are registered
@@ -836,6 +871,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       socket.off('tool-preferences-updated', handleToolPreferencesUpdated);
       socket.off('agent-runs', handleAgentRuns);
       socket.off('agent-run-updated', handleAgentRunUpdated);
+      socket.off('agent-tasks-updated', handleAgentTasksUpdated);
+      socket.off('agent-question-required', handleAgentQuestionRequired);
+      socket.off('agent-question-resolved', handleAgentQuestionResolved);
       socket.off('step-saved', handleStepSaved);
     };
   }, [appendPendingThoughtToSteps, availableTools, chatId, currentModel, mergeToolPreferences, processingMessageIndex, socket]);
@@ -1638,7 +1676,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   };
 
   const getTerminalCommand = (step: AgentStep) => {
-    if (step.actionName === 'bash' && typeof step.actionArgs?.command === 'string') {
+    if ((step.actionName === 'shell' || step.actionName === 'bash') && typeof step.actionArgs?.command === 'string') {
       return step.actionArgs.command;
     }
     if (step.actionName === 'read' && typeof step.actionArgs?.path === 'string') {
@@ -1662,6 +1700,24 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     if (step.actionName === 'list') {
       return `list ${typeof step.actionArgs?.path === 'string' ? step.actionArgs.path : '.'}`;
     }
+    if (step.actionName === 'browser') {
+      const action = typeof step.actionArgs?.action === 'string' ? step.actionArgs.action : 'visit';
+      const target =
+        action === 'visit' ? (step.actionArgs?.url || '') :
+        action === 'click' || action === 'type' ? (step.actionArgs?.selector || '') :
+        action === 'scroll' ? `${step.actionArgs?.scroll_y ?? 0}px` : '';
+      return `browser ${action} ${target}`.trim();
+    }
+    if (step.actionName === 'todo') {
+      const count = Array.isArray(step.actionArgs?.todos) ? step.actionArgs.todos.length : 0;
+      return `todo (${count} item${count === 1 ? '' : 's'})`;
+    }
+    if (step.actionName === 'question' && typeof step.actionArgs?.question === 'string') {
+      return `question: ${step.actionArgs.question}`;
+    }
+    if (step.actionName === 'task' && typeof step.actionArgs?.subagent_type === 'string') {
+      return `task ${step.actionArgs.subagent_type}`;
+    }
     return step.actionName || 'tool';
   };
 
@@ -1681,9 +1737,13 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     for (const step of steps) {
       if (step.type === 'action') {
         const id = `${entries.length}-${step.actionName || 'tool'}`;
+        // shell + bash both render as a command-style entry. The other v2
+        // tools (browser/question/todo/task/...) render as tool entries with
+        // their own arg display.
+        const isCommandLike = step.actionName === 'shell' || step.actionName === 'bash';
         entries.push({
           id,
-          type: step.actionName === 'bash' ? 'command' : 'tool',
+          type: isCommandLike ? 'command' : 'tool',
           title: step.actionName || 'tool',
           command: getTerminalCommand(step),
           args: step.actionArgs,
@@ -1820,28 +1880,96 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       .trimEnd();
   };
 
+  const extractAttachmentsMarker = (raw: string): { attachments: Array<{ mime: string; filename?: string; url: string }>; rest: string } => {
+    const re = /<!--operator:attachments=(.*?)-->\n?/g;
+    let attachments: Array<{ mime: string; filename?: string; url: string }> = [];
+    const rest = raw.replace(re, (_match, payload: string) => {
+      try {
+        const parsed = JSON.parse(payload);
+        if (Array.isArray(parsed)) {
+          attachments = attachments.concat(
+            parsed
+              .filter((a) => a && typeof a === 'object' && typeof a.url === 'string')
+              .map((a) => ({ mime: String(a.mime || ''), filename: a.filename ? String(a.filename) : undefined, url: String(a.url) }))
+          );
+        }
+      } catch {
+        // ignore malformed marker
+      }
+      return '';
+    });
+    return { attachments, rest };
+  };
+
+  const renderAttachments = (attachments: Array<{ mime: string; filename?: string; url: string }>) => {
+    if (attachments.length === 0) return null;
+    const decorate = (url: string): string => {
+      if (!url.startsWith('/api/agent-attachments/')) return url;
+      const token = localStorage.getItem('token');
+      if (!token) return url;
+      const sep = url.includes('?') ? '&' : '?';
+      return `${url}${sep}token=${encodeURIComponent(token)}`;
+    };
+    return (
+      <div className="mt-2 flex flex-wrap gap-2">
+        {attachments.map((att, idx) => {
+          const url = decorate(att.url);
+          const isImage = att.mime.startsWith('image/');
+          if (isImage) {
+            return (
+              <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="block overflow-hidden rounded border border-white/10 bg-black/30">
+                <img src={url} alt={att.filename || 'screenshot'} className="max-h-64 max-w-full object-contain" />
+              </a>
+            );
+          }
+          return (
+            <a key={idx} href={url} target="_blank" rel="noopener noreferrer" className="rounded border border-white/10 bg-black/30 px-3 py-1.5 text-xs text-zinc-300 hover:border-white/30">
+              {att.filename || att.url}
+            </a>
+          );
+        })}
+      </div>
+    );
+  };
+
   const renderTerminalOutput = (output?: string, type?: AgentTerminalEntry['type']) => {
     if (!output) return null;
+    const { attachments, rest } = extractAttachmentsMarker(output);
 
-    const normalized = (type === 'command' ? formatCommandTerminalOutput(output) : output)
+    const normalized = (type === 'command' ? formatCommandTerminalOutput(rest) : rest)
       .split('\n')
       .filter((line) => !line.includes('Warning: Permanently added') || !line.includes('known hosts'))
       .join('\n')
       .trimEnd();
-    if (!normalized) return null;
-    return <TerminalOutput normalized={normalized} type={type} />;
+    if (!normalized && attachments.length === 0) return null;
+    return (
+      <>
+        {normalized && <TerminalOutput normalized={normalized} type={type} />}
+        {renderAttachments(attachments)}
+      </>
+    );
   };
 
   const renderTerminalEntry = (entry: AgentTerminalEntry) => {
+    // LLM narration ("thought") renders without the `$ thought` header — just
+    // the text, so it reads as inline reasoning between commands.
+    if (entry.type === 'thought') {
+      return (
+        <div key={entry.id} className="border-b border-white/5 px-4 py-3 last:border-b-0">
+          <div className="text-sm leading-6 text-zinc-300 whitespace-pre-wrap">
+            {entry.output || entry.title}
+          </div>
+        </div>
+      );
+    }
+
     const accent = entry.type === 'command'
       ? 'text-emerald-300'
       : entry.type === 'tool'
         ? 'text-sky-300'
-        : entry.type === 'thought'
-          ? 'text-purple-300'
-          : entry.type === 'final'
-            ? 'text-emerald-200'
-            : 'text-zinc-300';
+        : entry.type === 'final'
+          ? 'text-emerald-200'
+          : 'text-zinc-300';
     const visibleArgs = entry.args && entry.type !== 'command'
       ? Object.entries(entry.args)
         .filter(([key]) => !['content', 'patchText', 'oldString', 'newString'].includes(key))
@@ -1870,6 +1998,26 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         {renderTerminalOutput(entry.output, entry.type)}
       </div>
     );
+  };
+
+  // Defined ABOVE renderAgentRunCard so the JSX inside the card can reference
+  // these handlers without hitting a TDZ error during the useMemo render pass
+  // (renderedMessages calls renderAgentRunCard before the component body has
+  // finished executing).
+  const handleAgentQuestionAnswer = (answer: string | string[]) => {
+    if (!socket || !agentQuestion) return;
+    socket.emit('agent-question-response', {
+      chatId: agentQuestion.chatId,
+      agentRunId: agentQuestion.agentRunId,
+      questionId: agentQuestion.questionId,
+      answer,
+    });
+    setAgentQuestion(null);
+  };
+
+  const handleAgentQuestionDismiss = () => {
+    // Dismiss without sending — backend will time out or accept the next steering message.
+    setAgentQuestion(null);
   };
 
   const renderAgentRunCard = (runId: string) => {
@@ -1957,9 +2105,72 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           </div>
         )}
 
+        {agentQuestion && agentQuestion.agentRunId === run.id && (
+          <AgentQuestionDialog
+            question={agentQuestion}
+            onAnswer={handleAgentQuestionAnswer}
+            onDismiss={handleAgentQuestionDismiss}
+          />
+        )}
+
         {run.error && (
           <div className="border-t border-red-500/20 bg-red-500/10 px-4 py-3 font-mono text-sm text-red-200">
             {run.error}
+          </div>
+        )}
+
+        {(agentRunTasks[run.id]?.length ?? 0) > 0 && (
+          <div className="border-t border-white/10 bg-[#0a0a0c] px-4 py-3">
+            <div className="mb-2 font-mono text-xs uppercase tracking-wide text-zinc-500">tasks</div>
+            <ul className="space-y-1.5">
+              {agentRunTasks[run.id]!.map((task) => {
+                const priorityClass =
+                  task.priority === 'high' ? 'border-red-500/40 text-red-200' :
+                  task.priority === 'low' ? 'border-zinc-600 text-zinc-400' :
+                  'border-amber-500/40 text-amber-200';
+                const titleClass =
+                  task.status === 'completed' ? 'text-zinc-500 line-through' :
+                  task.status === 'cancelled' ? 'text-zinc-600 line-through' :
+                  'text-zinc-200';
+                return (
+                  <li key={task.id} className="flex items-start gap-2 text-sm">
+                    <span aria-hidden className="mt-0.5 flex-shrink-0">
+                      {task.status === 'completed' ? (
+                        <svg className="size-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                        </svg>
+                      ) : task.status === 'cancelled' ? (
+                        <svg className="size-4 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 6l12 12M6 18L18 6" />
+                        </svg>
+                      ) : task.status === 'in_progress' ? (
+                        <svg className="size-4 animate-spin text-amber-400" viewBox="0 0 24 24" fill="none">
+                          <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeOpacity="0.25" />
+                          <path d="M22 12a10 10 0 01-10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                        </svg>
+                      ) : (
+                        <svg className="size-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <circle cx="12" cy="12" r="9" strokeWidth="2" />
+                        </svg>
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <div className={titleClass}>{task.subject}</div>
+                        {task.priority && (
+                          <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${priorityClass}`}>
+                            {task.priority}
+                          </span>
+                        )}
+                      </div>
+                      {task.description && (
+                        <div className="mt-0.5 text-xs text-zinc-500">{task.description}</div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
         )}
       </div>

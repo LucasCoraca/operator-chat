@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { createPatch } from 'diff';
 import { SandboxManager } from './sandboxManager';
 
 export type WorkspaceKind = 'local_sandbox' | 'ssh_remote';
@@ -127,26 +128,18 @@ function truncateOutput(value: string): { value: string; truncated: boolean } {
 }
 
 function unifiedDiff(filePath: string, oldContent: string, newContent: string): string {
-  const oldLines = oldContent.split('\n');
-  const newLines = newContent.split('\n');
-  const out = [`--- ${filePath}`, `+++ ${filePath}`];
-  const max = Math.max(oldLines.length, newLines.length);
-
-  for (let index = 0; index < max; index++) {
-    const oldLine = oldLines[index];
-    const newLine = newLines[index];
-    if (oldLine === newLine) {
-      continue;
-    }
-    if (oldLine !== undefined) {
-      out.push(`-${oldLine}`);
-    }
-    if (newLine !== undefined) {
-      out.push(`+${newLine}`);
-    }
-  }
-
-  return out.join('\n');
+  // The previous implementation walked both files in lockstep by line index,
+  // which produced nonsense whenever an edit inserted or removed lines (every
+  // line after the change appeared "different" because old[i] no longer
+  // aligned with new[i]). The LLM read those garbled diffs and concluded its
+  // own edit had corrupted the file. Use a real Myers-based diff via the
+  // `diff` package so the output reflects only the actual change.
+  const patch = createPatch(filePath, oldContent, newContent, '', '', { context: 3 });
+  // createPatch prepends an `Index:` header and a separator we don't want in
+  // tool output. Strip the first two lines so the result starts at `--- file`.
+  const lines = patch.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('---'));
+  return start >= 0 ? lines.slice(start).join('\n').trimEnd() : patch.trimEnd();
 }
 
 function replaceExact(content: string, oldString: string, newString: string, replaceAll = false): string {

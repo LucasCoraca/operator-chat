@@ -48,6 +48,7 @@ services:
     restart: unless-stopped
     environment:
       NODE_ENV: production
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=3584}
       PORT: 3001
       DB_HOST: mariadb
       DB_PORT: 3306
@@ -59,6 +60,7 @@ services:
       LLAMA_MODEL: ${LLAMA_MODEL:-claude-3-5-sonnet-20241022}
       SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://localhost:8080}
       SEARXNG_SAFE_SEARCH: ${SEARXNG_SAFE_SEARCH:-1}
+      DEBUG_LLAMA: ${DEBUG_LLAMA:-0}
     ports:
       - "${BACKEND_PORT:-3001}:3001"
     volumes:
@@ -86,7 +88,7 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 2G
+          memory: 4G
         reservations:
           cpus: '1'
           memory: 1G

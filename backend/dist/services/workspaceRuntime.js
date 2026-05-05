@@ -8,6 +8,7 @@ const crypto_1 = require("crypto");
 const child_process_1 = require("child_process");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
+const diff_1 = require("diff");
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_READ_LIMIT = 300;
 const MAX_READ_LIMIT = 1000;
@@ -62,24 +63,18 @@ function truncateOutput(value) {
     };
 }
 function unifiedDiff(filePath, oldContent, newContent) {
-    const oldLines = oldContent.split('\n');
-    const newLines = newContent.split('\n');
-    const out = [`--- ${filePath}`, `+++ ${filePath}`];
-    const max = Math.max(oldLines.length, newLines.length);
-    for (let index = 0; index < max; index++) {
-        const oldLine = oldLines[index];
-        const newLine = newLines[index];
-        if (oldLine === newLine) {
-            continue;
-        }
-        if (oldLine !== undefined) {
-            out.push(`-${oldLine}`);
-        }
-        if (newLine !== undefined) {
-            out.push(`+${newLine}`);
-        }
-    }
-    return out.join('\n');
+    // The previous implementation walked both files in lockstep by line index,
+    // which produced nonsense whenever an edit inserted or removed lines (every
+    // line after the change appeared "different" because old[i] no longer
+    // aligned with new[i]). The LLM read those garbled diffs and concluded its
+    // own edit had corrupted the file. Use a real Myers-based diff via the
+    // `diff` package so the output reflects only the actual change.
+    const patch = (0, diff_1.createPatch)(filePath, oldContent, newContent, '', '', { context: 3 });
+    // createPatch prepends an `Index:` header and a separator we don't want in
+    // tool output. Strip the first two lines so the result starts at `--- file`.
+    const lines = patch.split('\n');
+    const start = lines.findIndex((line) => line.startsWith('---'));
+    return start >= 0 ? lines.slice(start).join('\n').trimEnd() : patch.trimEnd();
 }
 function replaceExact(content, oldString, newString, replaceAll = false) {
     if (oldString === newString) {

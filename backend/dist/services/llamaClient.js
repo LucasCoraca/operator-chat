@@ -235,7 +235,9 @@ class LlamaClient {
                             if (functionCall?.arguments) {
                                 toolCallArguments += functionCall.arguments;
                             }
-                            console.log('LLAMA CLIENT: Tool call detected:', toolCall);
+                            if (process.env.DEBUG_LLAMA === '1') {
+                                console.log('LLAMA CLIENT: Tool call detected:', toolCall);
+                            }
                         }
                         // Handle reasoning_content field (for models that use it like DeepSeek via OpenRouter)
                         const reasoningContent = delta?.reasoning_content || '';
@@ -265,12 +267,13 @@ class LlamaClient {
                             const usage = chunk.usage;
                             // Check for custom timing fields that llama.cpp may include in the chunk
                             const customTimings = chunk?.timings;
-                            // Log raw chunk data for debugging
-                            console.log('LLAMA CLIENT: Final chunk received');
-                            console.log('LLAMA CLIENT: Stream duration:', streamDurationMs, 'ms');
-                            console.log('LLAMA CLIENT: Token count (manual):', tokenCount);
-                            console.log('LLAMA CLIENT: Usage field:', usage);
-                            console.log('LLAMA CLIENT: Custom timings field:', customTimings);
+                            if (process.env.DEBUG_LLAMA === '1') {
+                                console.log('LLAMA CLIENT: Final chunk received');
+                                console.log('LLAMA CLIENT: Stream duration:', streamDurationMs, 'ms');
+                                console.log('LLAMA CLIENT: Token count (manual):', tokenCount);
+                                console.log('LLAMA CLIENT: Usage field:', usage);
+                                console.log('LLAMA CLIENT: Custom timings field:', customTimings);
+                            }
                             if (customTimings || usage) {
                                 timings = {
                                     // Use custom timings from llama.cpp if available, otherwise use usage field
@@ -286,11 +289,9 @@ class LlamaClient {
                                 // Calculate tokens per second if not provided but we have the raw data
                                 if (timings.predicted_n && timings.predicted_ms && !timings.predicted_per_second) {
                                     timings.predicted_per_second = (timings.predicted_n / timings.predicted_ms) * 1000;
-                                    console.log('LLAMA CLIENT: Calculated predicted_per_second from raw data:', timings.predicted_per_second);
                                 }
                                 if (timings.prompt_n && timings.prompt_ms && !timings.prompt_per_second) {
                                     timings.prompt_per_second = (timings.prompt_n / timings.prompt_ms) * 1000;
-                                    console.log('LLAMA CLIENT: Calculated prompt_per_second from raw data:', timings.prompt_per_second);
                                 }
                             }
                             else {
@@ -301,11 +302,8 @@ class LlamaClient {
                                         predicted_ms: streamDurationMs,
                                         predicted_per_second: (tokenCount / streamDurationMs) * 1000,
                                     };
-                                    console.log('LLAMA CLIENT: Using manual timing calculation');
                                 }
                             }
-                            // Log the timing data for debugging
-                            console.log('LLAMA CLIENT: Final timing data:', timings);
                             handleDone();
                             return;
                         }

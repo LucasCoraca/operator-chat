@@ -5,46 +5,64 @@ const browserClient_1 = require("../services/browserClient");
 const workspaceRuntime_1 = require("../services/workspaceRuntime");
 const agentMemoryService_1 = require("../services/agentMemoryService");
 const taskRepository_1 = require("../repositories/taskRepository");
+const agentRunTaskRepository_1 = require("../repositories/agentRunTaskRepository");
 const schedule_1 = require("../services/schedule");
 const child_process_1 = require("child_process");
 const util_1 = require("util");
+const diff_1 = require("diff");
 const browserClient = new browserClient_1.BrowserClient();
 const execAsync = (0, util_1.promisify)(child_process_1.exec);
 function quoteShellArg(value) {
     return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 function diffPreview(filePath, oldContent, newContent, maxLines = 220) {
-    const oldLines = oldContent.length > 0 ? oldContent.split('\n') : [];
-    const newLines = newContent.length > 0 ? newContent.split('\n') : [];
-    const max = Math.max(oldLines.length, newLines.length);
-    const lines = [];
+    // Use a real Myers-based diff via the `diff` package instead of the
+    // previous lockstep-by-index walk that produced nonsense whenever lines
+    // were inserted or removed.
+    const patch = (0, diff_1.createPatch)(filePath, oldContent, newContent, '', '', { context: 3 });
+    const lines = patch.split('\n');
+    const start = lines.findIndex((line) => line.startsWith('---'));
+    const diffText = start >= 0 ? lines.slice(start).join('\n').trimEnd() : patch.trimEnd();
+    // Count additions/deletions for the header
     let additions = 0;
     let deletions = 0;
-    for (let index = 0; index < max; index++) {
-        if (oldLines[index] === newLines[index]) {
-            continue;
-        }
-        if (oldLines[index] !== undefined) {
-            deletions++;
-            if (lines.length < maxLines) {
-                lines.push(`${String(index + 1).padStart(6, ' ')} - ${oldLines[index]}`);
-            }
-        }
-        if (newLines[index] !== undefined) {
+    for (const line of diffText.split('\n')) {
+        if (line.startsWith('+') && !line.startsWith('+++'))
             additions++;
-            if (lines.length < maxLines) {
-                lines.push(`${String(index + 1).padStart(6, ' ')} + ${newLines[index]}`);
-            }
-        }
+        if (line.startsWith('-') && !line.startsWith('---'))
+            deletions++;
     }
+    // Truncate to maxLines of diff content
+    const diffLines = diffText.split('\n');
+    const truncated = diffLines.length > maxLines
+        ? [...diffLines.slice(0, maxLines), '[diff preview truncated]']
+        : diffLines;
     const header = `• Edited ${filePath} (+${additions} -${deletions})`;
-    if (lines.length >= maxLines) {
-        lines.push('[diff preview truncated]');
-    }
-    return [header, ...lines].join('\n');
+    return [header, ...truncated].join('\n');
 }
 function isRemoteWorkspaceContext(context) {
     return Boolean(context.workspace?.ssh?.enabled);
+}
+function formatTaskListForObservation(tasks) {
+    if (tasks.length === 0) {
+        return 'No tasks yet. Use task_create to add tasks.';
+    }
+    const lines = [];
+    for (const task of tasks) {
+        const marker = task.status === 'completed' ? '[x]' : task.status === 'in_progress' ? '[~]' : '[ ]';
+        lines.push(`${marker} ${task.id}  ${task.subject}`);
+        if (task.description) {
+            lines.push(`     ${task.description.split('\n').join('\n     ')}`);
+        }
+    }
+    return lines.join('\n');
+}
+async function emitTaskUpdate(context) {
+    if (!context.chatId || !context.agentRunId)
+        return [];
+    const tasks = await agentRunTaskRepository_1.agentRunTaskRepository.listByRun(context.chatId, context.agentRunId);
+    context.emitAgentTasksUpdated?.(context.chatId, context.agentRunId, tasks);
+    return tasks;
 }
 class ToolRegistry {
     tools;
@@ -152,23 +170,10 @@ class ToolRegistry {
                     return 'Error: path is required';
                 }
                 try {
-                    const memory = context.agentMemory || this.agentMemoryService;
-                    if (memory && context.chatId) {
-                        const normalizedPath = (0, agentMemoryService_1.normalizeMemoryPath)(filePath, context.workspace);
-                        const fileState = await memory.get({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, 'file_state', `file:${normalizedPath}`);
-                        const fileSummary = await memory.get({ chatId: context.chatId, workspace: context.workspace, agentRunId: context.agentRunId }, 'file_summary', `file:${normalizedPath}`);
-                        const metadata = fileState?.metadata || {};
-                        const requestedOffset = args.offset !== undefined ? Number(args.offset) : 1;
-                        const requestedLimit = args.limit !== undefined ? Number(args.limit) : undefined;
-                        const requestedEnd = requestedLimit ? requestedOffset + requestedLimit - 1 : undefined;
-                        const coversRange = metadata.lineStart !== undefined && metadata.lineEnd !== undefined
-                            && Number(metadata.lineStart) <= requestedOffset
-                            && (!requestedEnd || Number(metadata.lineEnd) >= requestedEnd);
-                        const defaultRead = args.offset === undefined && args.limit === undefined;
-                        if (fileSummary && (defaultRead || coversRange) && metadata.stale !== true) {
-                            return `Memory hit for ${normalizedPath}. This file is already represented in backend-managed memory and has not changed since the last known update.\n\n${fileSummary.content}\n\nUse read with a specific offset/limit only if you need exact lines not covered by this memory, or use grep for targeted lookup.`;
-                        }
-                    }
+                    // Note: the previous "memory hit" short-circuit returned a 1600-char summary
+                    // for any offset on a file that had been read once, which broke pagination
+                    // (the model would loop asking for higher offsets and keep getting line 1-40).
+                    // Range-aware deduplication now lives in the agent's fileViewCache layer.
                     const runtime = this.workspaceRuntimeFactory.createRemote(context.workspace);
                     const result = await runtime.readFile(filePath, {
                         offset: args.offset !== undefined ? Number(args.offset) : undefined,
@@ -359,6 +364,113 @@ class ToolRegistry {
                     });
                 }
                 return 'Memory checkpoint saved.';
+            },
+        });
+        this.tools.set('task_create', {
+            name: 'task_create',
+            internal: true,
+            description: 'Create a new task in the SSH agent run\'s checklist. Use this before starting non-trivial multi-step work to lay out the plan. Each task gets a unique id you will use to mark it in_progress and completed.',
+            parameters: {
+                subject: { type: 'string', description: 'Short imperative task title (e.g., "Add migration for users table")' },
+                description: { type: 'string', description: 'Optional longer description of what this task entails.', required: false },
+            },
+            policy: {
+                requiresApproval: false,
+                supportsAutoApprove: true,
+                capabilities: [],
+                sandboxPolicy: 'none',
+                riskLevel: 'low',
+            },
+            execute: async (args, context) => {
+                if (!context.chatId || !context.agentRunId) {
+                    return 'task_create is only available inside a spawned SSH agent run.';
+                }
+                const subject = String(args.subject || '').trim();
+                if (!subject) {
+                    return 'Error: subject is required';
+                }
+                const description = args.description !== undefined && args.description !== null
+                    ? String(args.description).trim() || null
+                    : null;
+                const created = await agentRunTaskRepository_1.agentRunTaskRepository.create({
+                    chatId: context.chatId,
+                    agentRunId: context.agentRunId,
+                    subject,
+                    description,
+                });
+                const tasks = await emitTaskUpdate(context);
+                return `Created task ${created.id}: ${created.subject}\n\nCurrent task list:\n${formatTaskListForObservation(tasks)}`;
+            },
+        });
+        this.tools.set('task_update', {
+            name: 'task_update',
+            internal: true,
+            description: 'Update a task\'s status, subject, or description. Mark a task in_progress when you begin working on it, and completed when finished. Status values: pending, in_progress, completed.',
+            parameters: {
+                taskId: { type: 'string', description: 'The task id returned by task_create' },
+                status: { type: 'string', description: 'New status: pending, in_progress, or completed. Optional.', required: false },
+                subject: { type: 'string', description: 'New subject. Optional.', required: false },
+                description: { type: 'string', description: 'New description. Optional.', required: false },
+            },
+            policy: {
+                requiresApproval: false,
+                supportsAutoApprove: true,
+                capabilities: [],
+                sandboxPolicy: 'none',
+                riskLevel: 'low',
+            },
+            execute: async (args, context) => {
+                if (!context.chatId || !context.agentRunId) {
+                    return 'task_update is only available inside a spawned SSH agent run.';
+                }
+                const taskId = String(args.taskId || '').trim();
+                if (!taskId) {
+                    return 'Error: taskId is required';
+                }
+                const update = {};
+                if (args.subject !== undefined) {
+                    update.subject = String(args.subject).trim();
+                }
+                if (args.description !== undefined) {
+                    const text = args.description === null ? null : String(args.description).trim();
+                    update.description = text || null;
+                }
+                if (args.status !== undefined) {
+                    const status = String(args.status).trim();
+                    if (!['pending', 'in_progress', 'completed'].includes(status)) {
+                        return 'Error: status must be one of pending, in_progress, completed';
+                    }
+                    update.status = status;
+                }
+                if (Object.keys(update).length === 0) {
+                    return 'Error: at least one of status, subject, or description must be provided';
+                }
+                const updated = await agentRunTaskRepository_1.agentRunTaskRepository.update(taskId, context.agentRunId, update);
+                if (!updated) {
+                    return `Error: task ${taskId} not found in this agent run.`;
+                }
+                const tasks = await emitTaskUpdate(context);
+                return `Updated task ${updated.id} (${updated.status}): ${updated.subject}\n\nCurrent task list:\n${formatTaskListForObservation(tasks)}`;
+            },
+        });
+        this.tools.set('task_list', {
+            name: 'task_list',
+            internal: true,
+            description: 'List all tasks in the SSH agent run\'s checklist with their statuses. Use this to recall your current plan before deciding the next step.',
+            parameters: {},
+            policy: {
+                requiresApproval: false,
+                supportsAutoApprove: true,
+                capabilities: [],
+                sandboxPolicy: 'none',
+                riskLevel: 'low',
+            },
+            execute: async (_args, context) => {
+                if (!context.chatId || !context.agentRunId) {
+                    return 'task_list is only available inside a spawned SSH agent run.';
+                }
+                const tasks = await agentRunTaskRepository_1.agentRunTaskRepository.listByRun(context.chatId, context.agentRunId);
+                return formatTaskListForObservation(tasks);
             },
         });
         this.tools.set('bash', {

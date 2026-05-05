@@ -242,6 +242,85 @@ async function initializeDatabase() {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
         await pool.execute(`
+      CREATE TABLE IF NOT EXISTS agent_sessions (
+        id VARCHAR(64) PRIMARY KEY,
+        chat_id VARCHAR(36) NOT NULL,
+        agent_run_id VARCHAR(36),
+        parent_session_id VARCHAR(64),
+        directory VARCHAR(1024) NOT NULL,
+        title VARCHAR(512) NOT NULL,
+        agent VARCHAR(128) NOT NULL,
+        model_data JSON,
+        revert_data JSON,
+        permission_data JSON,
+        time_compacting BIGINT,
+        time_archived BIGINT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_agent_sessions_chat (chat_id, created_at),
+        INDEX idx_agent_sessions_agent_run (agent_run_id),
+        INDEX idx_agent_sessions_parent (parent_session_id),
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+        await pool.execute(`
+      CREATE TABLE IF NOT EXISTS agent_session_messages (
+        id VARCHAR(64) PRIMARY KEY,
+        session_id VARCHAR(64) NOT NULL,
+        role ENUM('user', 'assistant') NOT NULL,
+        time_created BIGINT NOT NULL,
+        data JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_agent_messages_session_time (session_id, time_created, id),
+        FOREIGN KEY (session_id) REFERENCES agent_sessions(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+        await pool.execute(`
+      CREATE TABLE IF NOT EXISTS agent_session_parts (
+        id VARCHAR(64) PRIMARY KEY,
+        message_id VARCHAR(64) NOT NULL,
+        session_id VARCHAR(64) NOT NULL,
+        type VARCHAR(32) NOT NULL,
+        data JSON NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_agent_parts_message (message_id, id),
+        INDEX idx_agent_parts_session (session_id),
+        INDEX idx_agent_parts_type (session_id, type),
+        FOREIGN KEY (message_id) REFERENCES agent_session_messages(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+        await pool.execute(`
+      CREATE TABLE IF NOT EXISTS agent_run_tasks (
+        id VARCHAR(36) PRIMARY KEY,
+        chat_id VARCHAR(36) NOT NULL,
+        agent_run_id VARCHAR(36) NOT NULL,
+        subject VARCHAR(255) NOT NULL,
+        description TEXT,
+        status ENUM('pending', 'in_progress', 'completed', 'cancelled') NOT NULL DEFAULT 'pending',
+        priority ENUM('high', 'medium', 'low') NOT NULL DEFAULT 'medium',
+        order_index INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_agent_run_tasks_run (chat_id, agent_run_id, order_index),
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    `);
+        // Migrations for older deployments that pre-date the spec-compliant todo schema.
+        try {
+            await pool.execute(`ALTER TABLE agent_run_tasks MODIFY COLUMN status ENUM('pending', 'in_progress', 'completed', 'cancelled') NOT NULL DEFAULT 'pending'`);
+        }
+        catch (error) {
+            // ignore if already in place
+        }
+        try {
+            await pool.execute(`ALTER TABLE agent_run_tasks ADD COLUMN priority ENUM('high', 'medium', 'low') NOT NULL DEFAULT 'medium' AFTER status`);
+        }
+        catch (error) {
+            await ignoreDuplicateMigration(error);
+        }
+        await pool.execute(`
       CREATE TABLE IF NOT EXISTS agent_memory_events (
         id VARCHAR(36) PRIMARY KEY,
         memory_id VARCHAR(36),

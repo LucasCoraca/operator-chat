@@ -5,6 +5,7 @@ import { MCPClientManager } from '../services/mcpClientManager';
 import { WorkspaceConfig } from '../services/workspaceRuntime';
 import { AgentMemoryService } from '../services/agentMemoryService';
 import type { CreateAgentRunRequest } from '../agent/ReActAgent';
+import { AgentRunTask } from '../repositories/agentRunTaskRepository';
 export type ToolCapability = 'filesystem' | 'network' | 'process' | 'remote' | 'browser' | 'read_chat' | 'write_chat' | 'memory' | 'schedule';
 export type ToolSandboxPolicy = 'none' | 'chat_fs_only' | 'isolated_process' | 'workspace_runtime' | 'ssh_remote' | 'browser_isolated';
 export type ToolRiskLevel = 'low' | 'medium' | 'high';
@@ -39,6 +40,7 @@ export interface Tool {
         createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
         emitToolProgress?: (content: string) => void;
         agentMemory?: AgentMemoryService;
+        emitAgentTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void;
     }) => Promise<string>;
 }
 export declare class ToolRegistry {
@@ -69,6 +71,7 @@ export declare class ToolRegistry {
         createAgentRun?: (request: CreateAgentRunRequest) => Promise<string>;
         emitToolProgress?: (content: string) => void;
         agentMemory?: AgentMemoryService;
+        emitAgentTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void;
     }, enabledToolNames?: string[]): Promise<string>;
     getToolDescriptions(enabledToolNames?: string[]): string;
     getToolDefinitions(): Array<{

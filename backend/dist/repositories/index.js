@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TaskRepository = exports.taskRepository = exports.SettingsRepository = exports.settingsRepository = exports.PersonalityRepository = exports.personalityRepository = exports.MemoryRepository = exports.memoryRepository = exports.ChatRepository = exports.chatRepository = exports.UserRepository = exports.userRepository = void 0;
+exports.AgentSessionRepository = exports.agentSessionRepository = exports.AgentRunTaskRepository = exports.agentRunTaskRepository = exports.TaskRepository = exports.taskRepository = exports.SettingsRepository = exports.settingsRepository = exports.PersonalityRepository = exports.personalityRepository = exports.MemoryRepository = exports.memoryRepository = exports.ChatRepository = exports.chatRepository = exports.UserRepository = exports.userRepository = void 0;
 var userRepository_1 = require("./userRepository");
 Object.defineProperty(exports, "userRepository", { enumerable: true, get: function () { return userRepository_1.userRepository; } });
 Object.defineProperty(exports, "UserRepository", { enumerable: true, get: function () { return userRepository_1.UserRepository; } });
@@ -19,4 +19,10 @@ Object.defineProperty(exports, "SettingsRepository", { enumerable: true, get: fu
 var taskRepository_1 = require("./taskRepository");
 Object.defineProperty(exports, "taskRepository", { enumerable: true, get: function () { return taskRepository_1.taskRepository; } });
 Object.defineProperty(exports, "TaskRepository", { enumerable: true, get: function () { return taskRepository_1.TaskRepository; } });
+var agentRunTaskRepository_1 = require("./agentRunTaskRepository");
+Object.defineProperty(exports, "agentRunTaskRepository", { enumerable: true, get: function () { return agentRunTaskRepository_1.agentRunTaskRepository; } });
+Object.defineProperty(exports, "AgentRunTaskRepository", { enumerable: true, get: function () { return agentRunTaskRepository_1.AgentRunTaskRepository; } });
+var agentSessionRepository_1 = require("./agentSessionRepository");
+Object.defineProperty(exports, "agentSessionRepository", { enumerable: true, get: function () { return agentSessionRepository_1.agentSessionRepository; } });
+Object.defineProperty(exports, "AgentSessionRepository", { enumerable: true, get: function () { return agentSessionRepository_1.AgentSessionRepository; } });
 //# sourceMappingURL=index.js.map
