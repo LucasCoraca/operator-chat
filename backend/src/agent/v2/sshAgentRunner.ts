@@ -78,6 +78,8 @@ export interface SshAgentCallbacks {
   onToolApprovalRequest?: (request: ToolApprovalRequest) => Promise<ToolApprovalResponse>;
   /** Called whenever the task list changes. */
   onTasksUpdated?: (chatId: string, agentRunId: string, tasks: AgentRunTask[]) => void;
+  /** Called after a tool that may have mutated workspace files. */
+  onWorkspaceChanged?: (hint: { tool: string; path?: string }) => void;
   /** Bridge for the `question` tool — show the prompt in the UI and wait for the user. */
   onAskUserQuestion?: (request: QuestionRequest) => Promise<QuestionResponse | null>;
   /** Bridge for the `task` tool — launch a subagent and wait for its result. */
@@ -94,6 +96,11 @@ export class SshAgentRunner {
   private abortController: AbortController | null = null;
   private pendingUserMessages: string[] = [];
   private compactionPending = false;
+  // Tracks consecutive iterations that produced narration but no tool call.
+  // Thinking models sometimes describe an action without committing to one;
+  // we re-prompt up to MAX_NO_TOOL_RETRIES times before treating as final.
+  private consecutiveNoToolRetries = 0;
+  private readonly MAX_NO_TOOL_RETRIES = 2;
 
   constructor(
     private readonly llama: LlamaClient,
@@ -300,6 +307,7 @@ export class SshAgentRunner {
         }
 
         if (streamResult.toolCall) {
+          this.consecutiveNoToolRetries = 0;
           const toolName = streamResult.toolCall.name;
           let parsedArgs: Record<string, any> = {};
           try {
@@ -428,14 +436,40 @@ export class SshAgentRunner {
               };
           await this.sessions.upsertPart(finalToolPart);
           await this.finalizeAssistant(assistantId, inputTokens, outputTokens);
+          if (!result.isError && (toolName === 'write' || toolName === 'edit' || toolName === 'shell')) {
+            const hintPath =
+              typeof parsedArgs?.path === 'string' ? parsedArgs.path :
+              typeof parsedArgs?.working_dir === 'string' ? parsedArgs.working_dir :
+              undefined;
+            this.callbacks.onWorkspaceChanged?.({ tool: toolName, path: hintPath });
+          }
           await this.emitProjection();
           continue;
         }
 
-        // No tool call -> this is the final answer. Pass the aggregated
-        // narration (every assistant TextPart, in order) to onComplete so the
-        // chat bubble keeps the full transcript instead of being overwritten
-        // with just the last iteration's streamed tokens.
+        // No tool call. Could mean:
+        //   (a) the model genuinely finished — that's the final answer.
+        //   (b) the model narrated an intended action ("Let me fix the HTML…")
+        //       without actually committing to a tool call. Common with thinking
+        //       models that leak reasoning into the content channel.
+        // For (b) we re-prompt up to MAX_NO_TOOL_RETRIES times before falling
+        // through to (a). The synthetic reminder is queued via the same path
+        // user steering messages use, so the next iteration sees it as history.
+        if (streamedText.trim() && this.consecutiveNoToolRetries < this.MAX_NO_TOOL_RETRIES) {
+          this.consecutiveNoToolRetries++;
+          await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
+          this.pendingUserMessages.push(
+            'Your previous turn described an action but did not emit a tool call. ' +
+            'If you intended to act (e.g. edit a file, run a command, reload the browser), emit the corresponding tool call now. ' +
+            'If you are finished and there is nothing more to do, reply with your final answer text only — without describing additional actions.'
+          );
+          await this.emitProjection();
+          continue;
+        }
+
+        // Final answer path. Pass the aggregated narration (every assistant
+        // TextPart, in order) to onComplete so the chat bubble keeps the full
+        // transcript instead of being overwritten with just the last iteration.
         await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
         await this.emitProjection();
         const aggregate = await this.computeFinalAnswerFromDb();

@@ -484,8 +484,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const scrollContentRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const scrollContentRef = useRef<HTMLDivElement | null>(null);
   const messageRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
   const jumpButtonRef = useRef<HTMLButtonElement>(null);
   const distanceFromBottomRef = useRef(0);
@@ -777,7 +777,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         if (serverTimingsRef.current?.predicted_per_second) {
           setStats({
             tokensPerSec: Math.round(serverTimingsRef.current.predicted_per_second),
-            contextSize: serverTimingsRef.current.predicted_n || 0,
+            contextSize:
+              (serverTimingsRef.current.prompt_n || 0) +
+              (serverTimingsRef.current.predicted_n || 0),
             promptTokensPerSec: serverTimingsRef.current.prompt_per_second ? Math.round(serverTimingsRef.current.prompt_per_second) : 0,
           });
         } else if (startTimeRef.current) {
@@ -823,7 +825,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         if (timings.predicted_per_second) {
           setStats({
             tokensPerSec: Math.round(timings.predicted_per_second),
-            contextSize: timings.predicted_n || 0,
+            contextSize: (timings.prompt_n || 0) + (timings.predicted_n || 0),
             promptTokensPerSec: timings.prompt_per_second ? Math.round(timings.prompt_per_second) : 0,
           });
         }
@@ -1197,21 +1199,43 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   // Auto-scroll: stick to bottom whenever the trace content grows (state updates,
   // streaming chunks, async screenshot loads). Stickiness is broken only by
   // genuine user scroll-up events (handleScroll), so growth alone never strands us.
-  useEffect(() => {
-    const container = scrollContainerRef.current;
-    const content = scrollContentRef.current;
-    if (!container || !content) return;
-
-    const stickIfNeeded = () => {
-      if (!stickToBottomRef.current) return;
-      container.scrollTop = container.scrollHeight;
-      if (jumpButtonRef.current) jumpButtonRef.current.style.display = 'none';
-    };
-
-    const observer = new ResizeObserver(stickIfNeeded);
-    observer.observe(content);
-    observer.observe(container);
-    return () => observer.disconnect();
+  // Callback refs (re)attach the observer whenever the content/container DOM nodes
+  // appear — needed because the content div is only rendered once messages exist.
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const stickToBottomNow = useCallback(() => {
+    const c = scrollContainerRef.current;
+    if (!c) return;
+    if (!stickToBottomRef.current) return;
+    c.scrollTop = c.scrollHeight;
+    if (jumpButtonRef.current) jumpButtonRef.current.style.display = 'none';
+  }, []);
+  const ensureObserver = useCallback(() => {
+    if (resizeObserverRef.current) return resizeObserverRef.current;
+    const observer = new ResizeObserver(stickToBottomNow);
+    resizeObserverRef.current = observer;
+    return observer;
+  }, [stickToBottomNow]);
+  const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
+    if (scrollContainerRef.current && resizeObserverRef.current) {
+      resizeObserverRef.current.unobserve(scrollContainerRef.current);
+    }
+    scrollContainerRef.current = node;
+    if (node) ensureObserver().observe(node);
+  }, [ensureObserver]);
+  const setScrollContentRef = useCallback((node: HTMLDivElement | null) => {
+    if (scrollContentRef.current && resizeObserverRef.current) {
+      resizeObserverRef.current.unobserve(scrollContentRef.current);
+    }
+    scrollContentRef.current = node;
+    if (node) {
+      ensureObserver().observe(node);
+      // Newly mounted (e.g. first message in an empty chat) — start at bottom.
+      stickToBottomNow();
+    }
+  }, [ensureObserver, stickToBottomNow]);
+  useEffect(() => () => {
+    resizeObserverRef.current?.disconnect();
+    resizeObserverRef.current = null;
   }, []);
 
   // Update refs when state changes
@@ -2821,9 +2845,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
-        ref={scrollContainerRef}
+        ref={setScrollContainerRef}
         onScroll={handleScroll}
-        className="relative flex-1 overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-8 md:pb-8 md:pt-8"
+        className="relative flex flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-8 md:pb-8 md:pt-8"
         style={{ scrollPaddingTop: '2rem', scrollPaddingBottom: '6rem' }}
       >
         {isEmptyState ? (
@@ -2843,13 +2867,12 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           </div>
         ) : (
           <>
-            <div ref={scrollContentRef} className="space-y-4 max-w-3xl mx-auto">
+            {/* Spacer pushes short content to the bottom (just above the composer); collapses to 0 when content overflows. */}
+            <div className="flex-1" />
+            <div ref={setScrollContentRef} className="space-y-4 max-w-3xl mx-auto w-full">
               {renderedMessages}
             </div>
             <div ref={messagesEndRef} />
-            {messages.length > 0 && (
-              <div className="pointer-events-none sticky bottom-[-120px] left-0 right-0 z-10 h-60 bg-gradient-to-t from-[#141415] via-[#141415]/95 to-transparent" />
-            )}
           </>
         )}
       </div>

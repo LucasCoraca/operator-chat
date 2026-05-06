@@ -248,6 +248,7 @@ function workspaceBlock(workspace?: WorkspaceConfig): string {
     '- For `<select>` dropdown menus, use `browser select` with the selector of the `<select>` element and the `value` of the option to pick — do NOT try to click the dropdown and then click an option (headless Puppeteer cannot render native dropdowns).',
     '- Available actions: visit, click, type (with optional submit:true), clear, press (any keyboard key — Enter/Tab/Escape/ArrowDown/etc), hover, focus, scroll, select, wait_for (selector to appear/disappear), evaluate (run async JS, returns serialized value), back, forward, reload. Use `browser actions` with a batch of sub-actions for sequences — avoids an LLM round-trip per step and captures a screenshot per sub-action shown as an animated sequence.',
     '- Reach for `browser evaluate` when no built-in action covers what you need (read computed styles, inspect localStorage, dispatch a custom event, etc.). Use `browser wait_for` instead of fixed `wait` sleeps when waiting for content to appear.',
+    '- After editing a file the page already loaded, a plain `browser reload` may still execute the cached JS. Pass `bypass_cache: true` (works on `visit` and `reload`) to do a hard refresh that re-fetches JS/CSS/HTML from disk. Default leaves the cache on, since that matches normal browser behavior and is faster.',
     '- If the browser visit returns a screenshot or console errors, treat that as the source of truth. Fix any console/network errors you see before reporting success.',
   ].join('\n');
 }

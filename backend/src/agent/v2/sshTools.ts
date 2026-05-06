@@ -640,6 +640,7 @@ const browserTool: SshAgentTool = {
       script: { type: 'string', description: 'Async JS body to evaluate; the return value is JSON-serialized (action=evaluate).' },
       timeout_ms: { type: 'number', description: 'Wait timeout in milliseconds (action=wait_for, default 10000).' },
       hidden: { type: 'boolean', description: 'For wait_for: wait until the element is hidden/removed instead of visible.' },
+      bypass_cache: { type: 'boolean', description: 'For visit/reload: hard refresh — disable HTTP cache for this navigation so JS/CSS/HTML are re-fetched fresh. Use after editing files when a normal reload still serves stale code. Default false (use cache, faster).' },
       actions: {
         type: 'array',
         description: 'Batch of sub-actions executed in sequence (action=actions). Each sub-action has the same fields as the top-level action.',
@@ -660,6 +661,7 @@ const browserTool: SshAgentTool = {
             script: { type: 'string' },
             timeout_ms: { type: 'number' },
             hidden: { type: 'boolean' },
+            bypass_cache: { type: 'boolean', description: 'For sub-action=reload: hard refresh ignoring HTTP cache.' },
           },
           required: ['action'],
         },
@@ -688,7 +690,7 @@ const browserTool: SshAgentTool = {
     } else if (action === 'visit') {
       const url = String(args.url || '').trim();
       if (!url) return capResult('browser', 'Error: url is required for visit', true);
-      result = await client.sessionVisit(sessionKey, url);
+      result = await client.sessionVisit(sessionKey, url, { bypassCache: Boolean(args.bypass_cache) });
     } else {
       const sub = buildSubActionFromArgs(action, args);
       if ('error' in sub) return capResult('browser', `Error: ${sub.error}`, true);
@@ -871,7 +873,7 @@ function buildSubActionFromArgs(
     }
     case 'back':    return { action: { action: 'back' } };
     case 'forward': return { action: { action: 'forward' } };
-    case 'reload':  return { action: { action: 'reload' } };
+    case 'reload':  return { action: { action: 'reload', bypass_cache: Boolean(args.bypass_cache) } };
     case 'wait_for': {
       const e = need(selector, 'selector'); if (e) return { error: e };
       return {

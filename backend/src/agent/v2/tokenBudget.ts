@@ -39,9 +39,13 @@ export function usable(input: { cfg: { compaction?: CompactionConfig }; model: M
   if (context === 0) return 0;
   const reserved =
     input.cfg.compaction?.reserved ?? Math.min(COMPACTION_BUFFER, input.model.maxOutputTokens);
-  return input.model.input
-    ? Math.max(0, input.model.input - reserved)
-    : Math.max(0, context - input.model.maxOutputTokens);
+  // Always honor `reserved` — when a caller derives it from a user-facing
+  // autoCompactThreshold (e.g. `context * (1 - 0.82)`), falling back to
+  // `maxOutputTokens` would silently ignore the threshold.
+  if (input.model.input) {
+    return Math.max(0, input.model.input - reserved);
+  }
+  return Math.max(0, context - reserved);
 }
 
 export function isOverflow(input: {

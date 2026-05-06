@@ -1479,7 +1479,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                       </svg>
                     </button>
                   </div>
-                  <RemoteWorkspaceExplorer />
+                  <RemoteWorkspaceExplorer socket={socket} />
                 </div>
               </>
             )}

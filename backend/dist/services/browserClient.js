@@ -374,14 +374,20 @@ class BrowserClient {
         this.cleanupIdleSessions();
         const state = await this.ensureSession(sessionId);
         this.resetBuffersForAction(state);
+        if (options.bypassCache)
+            await state.page.setCacheEnabled(false);
         try {
             await state.page.goto(url, { waitUntil: 'networkidle2', timeout: options.timeoutMs ?? 30_000 });
         }
         catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (options.bypassCache)
+                await state.page.setCacheEnabled(true);
             const result = await this.finalizeAction(state);
             return { ...result, error: message };
         }
+        if (options.bypassCache)
+            await state.page.setCacheEnabled(true);
         return await this.finalizeAction(state);
     }
     async sessionClick(sessionId, selector, options = {}) {
@@ -627,8 +633,20 @@ class BrowserClient {
                         break;
                     }
                     case 'reload': {
-                        await state.page.reload({ waitUntil: 'networkidle2', timeout: 30_000 });
-                        results.push({ action: 'reload', success: true });
+                        // bypass_cache=true does a hard reload (Ctrl+Shift+R equivalent):
+                        // disable HTTP cache for this navigation so JS/CSS/HTML are
+                        // re-fetched fresh, then restore the default. Useful after the
+                        // agent edits a file and wants to see the new code execute.
+                        if (a.bypass_cache)
+                            await state.page.setCacheEnabled(false);
+                        try {
+                            await state.page.reload({ waitUntil: 'networkidle2', timeout: 30_000 });
+                        }
+                        finally {
+                            if (a.bypass_cache)
+                                await state.page.setCacheEnabled(true);
+                        }
+                        results.push({ action: a.bypass_cache ? 'reload (hard)' : 'reload', success: true });
                         await captureFrame();
                         break;
                     }

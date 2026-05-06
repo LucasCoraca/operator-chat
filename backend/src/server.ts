@@ -1835,6 +1835,9 @@ async function startChatAgentRun(
       onTasksUpdated: (chatId, agentRunId, tasks) => {
         io.to(sourceSocketChatId).emit('agent-tasks-updated', { chatId, agentRunId, tasks });
       },
+      onWorkspaceChanged: (hint) => {
+        io.to(userId).emit('remote-workspace-changed', hint);
+      },
       onAskUserQuestion: async (request) => {
         return await new Promise<{ answer: string | string[]; answered: boolean } | null>((resolve) => {
           const payload: PendingQuestionPayload = {
@@ -2268,7 +2271,7 @@ app.get('/api/chat/search', protect, (req: AuthRequest, res) => {
 });
 
 // Delete chat
-app.delete('/api/chat/:chatId', protect, (req: AuthRequest, res) => {
+app.delete('/api/chat/:chatId', protect, async (req: AuthRequest, res) => {
   const { chatId } = req.params;
   const userId = req.user!.id;
   const session = chatSessions.get(chatId);
@@ -2276,7 +2279,15 @@ app.delete('/api/chat/:chatId', protect, (req: AuthRequest, res) => {
   if (session && session.userId === userId) {
     sandboxManager.deleteSandbox(session.sandboxId);
     chatSessions.delete(chatId);
-    saveChats();
+    try {
+      // saveChats() iterates the in-memory map and persists what's still
+      // there — it never issues a DELETE for removed rows. Without this
+      // the row stays in MariaDB and re-appears on the next loadChats().
+      await chatRepository.delete(chatId);
+    } catch (error) {
+      console.error(`Failed to delete chat ${chatId} from DB:`, error);
+      return res.status(500).json({ error: 'Failed to delete chat' });
+    }
     res.json({ success: true });
   } else {
     res.status(404).json({ error: 'Chat not found' });

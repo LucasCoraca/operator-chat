@@ -70,7 +70,7 @@ export type BrowserSubAction =
   | { action: 'evaluate'; script: string }
   | { action: 'back' }
   | { action: 'forward' }
-  | { action: 'reload' }
+  | { action: 'reload'; bypass_cache?: boolean }
   | { action: 'wait_for'; selector: string; timeout_ms?: number; hidden?: boolean };
 
 interface SessionState {
@@ -153,7 +153,7 @@ export class BrowserClient {
       }
 
       const page = await this.browser.newPage();
-      
+
       // Set viewport and user agent
       await page.setViewport({ width: 1280, height: 800 });
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36');
@@ -489,17 +489,20 @@ export class BrowserClient {
     state.lastUsed = Date.now();
   }
 
-  async sessionVisit(sessionId: string, url: string, options: { timeoutMs?: number } = {}): Promise<BrowserSessionResult> {
+  async sessionVisit(sessionId: string, url: string, options: { timeoutMs?: number; bypassCache?: boolean } = {}): Promise<BrowserSessionResult> {
     this.cleanupIdleSessions();
     const state = await this.ensureSession(sessionId);
     this.resetBuffersForAction(state);
+    if (options.bypassCache) await state.page.setCacheEnabled(false);
     try {
       await state.page.goto(url, { waitUntil: 'networkidle2', timeout: options.timeoutMs ?? 30_000 });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      if (options.bypassCache) await state.page.setCacheEnabled(true);
       const result = await this.finalizeAction(state);
       return { ...result, error: message };
     }
+    if (options.bypassCache) await state.page.setCacheEnabled(true);
     return await this.finalizeAction(state);
   }
 
@@ -741,8 +744,17 @@ export class BrowserClient {
             break;
           }
           case 'reload': {
-            await state.page.reload({ waitUntil: 'networkidle2', timeout: 30_000 });
-            results.push({ action: 'reload', success: true });
+            // bypass_cache=true does a hard reload (Ctrl+Shift+R equivalent):
+            // disable HTTP cache for this navigation so JS/CSS/HTML are
+            // re-fetched fresh, then restore the default. Useful after the
+            // agent edits a file and wants to see the new code execute.
+            if (a.bypass_cache) await state.page.setCacheEnabled(false);
+            try {
+              await state.page.reload({ waitUntil: 'networkidle2', timeout: 30_000 });
+            } finally {
+              if (a.bypass_cache) await state.page.setCacheEnabled(true);
+            }
+            results.push({ action: a.bypass_cache ? 'reload (hard)' : 'reload', success: true });
             await captureFrame();
             break;
           }

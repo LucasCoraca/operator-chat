@@ -102,6 +102,7 @@ export type BrowserSubAction = {
     action: 'forward';
 } | {
     action: 'reload';
+    bypass_cache?: boolean;
 } | {
     action: 'wait_for';
     selector: string;
@@ -163,6 +164,7 @@ export declare class BrowserClient {
     private resetBuffersForAction;
     sessionVisit(sessionId: string, url: string, options?: {
         timeoutMs?: number;
+        bypassCache?: boolean;
     }): Promise<BrowserSessionResult>;
     sessionClick(sessionId: string, selector: string, options?: {
         timeoutMs?: number;

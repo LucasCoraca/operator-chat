@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { Socket } from 'socket.io-client';
 import * as authService from '../services/auth';
 
 interface FileSystemItem {
@@ -109,7 +110,11 @@ async function readJsonResponse(res: Response) {
   }
 }
 
-function RemoteWorkspaceExplorer() {
+interface RemoteWorkspaceExplorerProps {
+  socket?: Socket | null;
+}
+
+function RemoteWorkspaceExplorer({ socket }: RemoteWorkspaceExplorerProps = {}) {
   const [files, setFiles] = useState<FileSystemItem[]>([]);
   const [currentPath, setCurrentPath] = useState('');
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -148,6 +153,28 @@ function RemoteWorkspaceExplorer() {
   useEffect(() => {
     loadFiles(currentPath);
   }, []);
+
+  // Live refresh: when the SSH agent runs write/edit/shell, the backend emits
+  // `remote-workspace-changed`. We refresh the *current* folder view (debounced
+  // so a burst of writes coalesces into a single reload).
+  const currentPathRef = useRef(currentPath);
+  useEffect(() => { currentPathRef.current = currentPath; }, [currentPath]);
+  useEffect(() => {
+    if (!socket) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onChange = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        loadFiles(currentPathRef.current);
+      }, 250);
+    };
+    socket.on('remote-workspace-changed', onChange);
+    return () => {
+      if (timer) clearTimeout(timer);
+      socket.off('remote-workspace-changed', onChange);
+    };
+  }, [socket]);
 
   const navigateTo = (path: string) => {
     setCurrentPath(path);
