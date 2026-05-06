@@ -1897,9 +1897,12 @@ async function startChatAgentRun(
     sessionId: agentSession.id,
   });
 
+  console.log(`[startChatAgentRun] Starting SSH agent runner for run ${run.id}`);
   void (async () => {
     try {
       await runner.run();
+    } catch (error) {
+      console.error(`[startChatAgentRun] SSH agent runner error for run ${run.id}:`, error);
     } finally {
       runningAgentRuns.delete(run.id);
       clearPendingApprovalsForChat(sourceSocketChatId);
@@ -2733,9 +2736,6 @@ io.on('connection', (socket) => {
     const hasActiveAgent = session.currentAgent !== undefined;
     const hasIncompleteState = session.agentState && !session.agentState.isComplete && (session.agentState.steps?.length ?? 0) > 0;
     
-    console.log(`Join-chat for ${chatId}: hasActiveAgent=${hasActiveAgent}, hasIncompleteState=${hasIncompleteState}, agentState=${JSON.stringify(session.agentState)}`);
-
-    // If there's an active agent or incomplete state, emit the current state so the client can restore streaming state
     if (hasActiveAgent || hasIncompleteState) {
       const stateToEmit = {
         steps: session.agentState?.steps || [],
@@ -2745,13 +2745,11 @@ io.on('connection', (socket) => {
         partialFinalAnswer: session.agentState?.partialFinalAnswer || null,
       };
       socket.emit('agent-state', stateToEmit);
-      console.log(`Emitting agent state to reconnecting client for chat ${chatId}:`, stateToEmit);
     }
 
     const pendingApproval = getPendingApprovalPayloadForChat(chatId);
     if (pendingApproval) {
       socket.emit('tool-approval-required', pendingApproval);
-      console.log(`Re-emitting pending approval ${pendingApproval.approvalId} to socket ${socket.id} for chat ${chatId}`);
     }
 
     // Re-emit any pending agent question for this chat so the dialog survives
@@ -2760,7 +2758,6 @@ io.on('connection', (socket) => {
     for (const pending of pendingQuestions.values()) {
       if (pending.payload.chatId !== chatId) continue;
       socket.emit('agent-question-required', pending.payload);
-      console.log(`Re-emitting pending question ${pending.payload.questionId} to socket ${socket.id} for chat ${chatId}`);
     }
 
     socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
@@ -2880,11 +2877,9 @@ io.on('connection', (socket) => {
         io.to(chatId).emit('thought-token', token);
       },
       onDebugInfo: (rawContent: string, parsed: any) => {
-        console.log('EMITTING DEBUG INFO:', { rawContent: rawContent.substring(0, 100), parsed });
         io.to(chatId).emit('debug-info', { rawContent, parsed });
       },
       onTimings: (timings: ChatTimings) => {
-        console.log('EMITTING TIMINGS:', timings);
         io.to(chatId).emit('timings', timings);
       },
       onError: (error: string) => {
@@ -3015,8 +3010,9 @@ io.on('connection', (socket) => {
         }
       }
 
-      // Add assistant message (final answer)
-      if (result.finalAnswer) {
+      // Add assistant message (final answer) - skip if SSH agent was spawned for this chat
+      // (the SSH agent's onComplete callback emits it instead)
+      if (result.finalAnswer && !session.agentRuns?.some(r => r.status === 'running' || r.status === 'completed')) {
         session.messages.push({
           id: crypto.randomUUID(),
           role: 'assistant',
@@ -3036,8 +3032,9 @@ io.on('connection', (socket) => {
       saveChats();
       emitChatUpdated(session);
 
+      const finalAnswerForUI = result.finalAnswer || session.agentRuns?.find(r => r.status === 'completed')?.finalAnswer || null;
       io.to(chatId).emit('agent-complete', {
-        finalAnswer: result.finalAnswer,
+        finalAnswer: finalAnswerForUI,
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

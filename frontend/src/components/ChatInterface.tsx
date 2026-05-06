@@ -504,6 +504,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const streamingChatIdRef = useRef<string | null>(null);
   const streamingThoughtContentRef = useRef('');
   const currentStepTypeRef = useRef<'thought' | 'action' | 'observation' | 'mode_transition' | 'final_answer' | null>(null);
+  const bufferedFinalAnswerRef = useRef<string>('');
 
   const [searchParams] = useSearchParams();
   const location = useLocation();
@@ -610,24 +611,35 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           setTokenCount(0);
         }
       } else {
+        const agentRunId = getAgentRunIdFromMessage(data);
         setMessages((prev) => {
           const updated = [...prev];
-          const agentRunId = getAgentRunIdFromMessage(data);
           if (agentRunId) {
-            const alreadyExists = updated.some((message) => getAgentRunIdFromMessage(message) === agentRunId);
-            return alreadyExists
-              ? updated
-              : [...updated, { ...data, agentRunId, model: data.model ?? currentModel, id: generateUUID(), agentSteps: [] }];
+            const exists = updated.some((message) => getAgentRunIdFromMessage(message) === agentRunId);
+            if (exists) return updated;
+            // Insert agent run message right after the processing user message
+            const insertIndex = processingMessageIndex != null ? processingMessageIndex + 1 : updated.length;
+            updated.splice(insertIndex, 0, { ...data, agentRunId, model: data.model ?? currentModel, id: generateUUID(), agentSteps: [] });
+            return updated;
           }
 
-          const persistedSteps = appendPendingThoughtToSteps(currentAgentStepsRef.current);
-          currentAgentStepsRef.current = persistedSteps;
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === 'user') {
-              updated[i] = { ...updated[i], agentSteps: [...persistedSteps] };
-              break;
+           const lastMsg = updated[updated.length - 1];
+            if (lastMsg?.role === 'assistant' && lastMsg.content === data.content) {
+              return updated;
             }
-          }
+            // Also check if any message already has this exact content
+            if (updated.some(m => m.role === 'assistant' && m.content === data.content)) {
+              return updated;
+            }
+
+            const persistedSteps = appendPendingThoughtToSteps(currentAgentStepsRef.current);
+            currentAgentStepsRef.current = persistedSteps;
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === 'user') {
+                updated[i] = { ...updated[i], agentSteps: [...persistedSteps] };
+                break;
+              }
+            }
           const targetUserIndex = processingMessageIndex ?? (() => {
             for (let i = updated.length - 1; i >= 0; i--) {
               if (updated[i].role === 'user') return i;
@@ -635,19 +647,34 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             return -1;
           })();
           const nextMessageIndex = targetUserIndex >= 0 ? targetUserIndex + 1 : -1;
-          const existingAssistantIndex = nextMessageIndex >= 0
-            && updated[nextMessageIndex]?.role === 'assistant'
-            && !getAgentRunIdFromMessage(updated[nextMessageIndex])
-              ? nextMessageIndex
-              : -1;
+           const existingAssistantIndex = nextMessageIndex >= 0
+             && updated[nextMessageIndex]?.role === 'assistant'
+             && !getAgentRunIdFromMessage(updated[nextMessageIndex])
+               ? nextMessageIndex
+               : -1;
 
-          if (existingAssistantIndex >= 0) {
-            updated[existingAssistantIndex] = { ...updated[existingAssistantIndex], ...data, agentSteps: [] };
-          } else {
-            updated.push({ ...data, model: data.model ?? currentModel, id: generateUUID(), agentSteps: [] });
-          }
+         const agentRunIdAtNext = nextMessageIndex >= 0 ? getAgentRunIdFromMessage(updated[nextMessageIndex]) : null;
+            let targetAssistantIndex = existingAssistantIndex;
+            if (targetAssistantIndex < 0 && agentRunIdAtNext) {
+              const afterAgentRun = nextMessageIndex + 1;
+              if (updated[afterAgentRun]?.role === 'assistant' && !getAgentRunIdFromMessage(updated[afterAgentRun])) {
+                targetAssistantIndex = afterAgentRun;
+              }
+            }
 
-          const latestAssistantIndex = existingAssistantIndex >= 0 ? existingAssistantIndex : updated.length - 1;
+            const bufferedContent = bufferedFinalAnswerRef.current;
+            if (targetAssistantIndex >= 0) {
+              const content = bufferedContent || data.content;
+              updated[targetAssistantIndex] = { ...updated[targetAssistantIndex], ...data, content, agentSteps: [] };
+            } else if (!agentRunIdAtNext) {
+              const content = bufferedContent || data.content;
+              updated.push({ ...data, content, model: data.model ?? currentModel, id: generateUUID(), agentSteps: [] });
+            }
+            if (bufferedContent) {
+             bufferedFinalAnswerRef.current = '';
+           }
+
+          const latestAssistantIndex = targetAssistantIndex >= 0 ? targetAssistantIndex : updated.length - 1;
           const latestAssistant = updated[latestAssistantIndex];
           if (latestAssistant && latestAssistant.role === 'assistant') {
             updated[latestAssistantIndex] = {
@@ -656,11 +683,13 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             };
           }
           return updated;
-        });
-        setProcessingMessageIndex(null);
-        setStreamingContent('');
-      }
-    };
+         });
+         if (!agentRunId) {
+           setProcessingMessageIndex(null);
+           setStreamingContent('');
+         }
+       }
+     };
 
     const onAgentStep = (data: AgentStep) => {
       setCurrentAgentSteps((prev) => {
@@ -694,46 +723,65 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       }
     };
 
-    const onFinalAnswerToken = (data: FinalAnswerTokenPayload | string) => {
+     const onFinalAnswerToken = (data: FinalAnswerTokenPayload | string) => {
       // Only process tokens for the currently active streaming chat
       if (streamingChatIdRef.current !== chatId) {
-        console.log(`Ignoring final-answer-token for chat ${streamingChatIdRef.current}, current chat is ${chatId}`);
         return;
       }
       
-      const token = typeof data === 'string' ? data : data.token;
+     const token = typeof data === 'string' ? data : data.token;
       const model = typeof data === 'string' ? undefined : data.model;
-      // Stream final answer tokens directly to the assistant message content
-      // This ensures the final answer appears outside the reasoning block
-      setMessages((prev) => {
-        const updated = [...prev];
-        const targetUserIndex = processingMessageIndex ?? (() => {
-          for (let i = updated.length - 1; i >= 0; i--) {
-            if (updated[i].role === 'user') return i;
+
+      // Check if there's an SSH agent run message right after the user message
+      // If so, buffer the tokens instead of creating a temporary message to avoid flicker
+      const checkForAgentRun = () => {
+        const pmIndex = processingMessageIndex ?? (() => {
+          for (let i = messagesRef.current.length - 1; i >= 0; i--) {
+            if (messagesRef.current[i].role === 'user') return i;
           }
           return -1;
         })();
-
-        if (targetUserIndex !== -1) {
-          const nextMessage = updated[targetUserIndex + 1];
-          if (nextMessage?.role === 'assistant' && !getAgentRunIdFromMessage(nextMessage)) {
-            updated[targetUserIndex + 1] = {
-              ...nextMessage,
-              content: nextMessage.content + token,
-              model: nextMessage.model ?? model,
-            };
-          } else {
-            updated.splice(targetUserIndex + 1, 0, {
-              role: 'assistant',
-              content: token,
-              model,
-              id: generateUUID(),
-              agentSteps: [],
-            });
-          }
+        if (pmIndex >= 0) {
+          return getAgentRunIdFromMessage(messagesRef.current[pmIndex + 1]);
         }
-        return updated;
-      });
+        return null;
+      };
+
+      if (checkForAgentRun()) {
+        bufferedFinalAnswerRef.current += token;
+      } else {
+        // Stream final answer tokens directly to the assistant message content
+        // This ensures the final answer appears outside the reasoning block
+        setMessages((prev) => {
+          const updated = [...prev];
+          const targetUserIndex = processingMessageIndex ?? (() => {
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].role === 'user') return i;
+            }
+            return -1;
+          })();
+
+          if (targetUserIndex !== -1) {
+            const nextMessage = updated[targetUserIndex + 1];
+            if (nextMessage?.role === 'assistant' && !getAgentRunIdFromMessage(nextMessage)) {
+              updated[targetUserIndex + 1] = {
+                ...nextMessage,
+                content: nextMessage.content + token,
+                model: nextMessage.model ?? model,
+              };
+            } else {
+              updated.splice(targetUserIndex + 1, 0, {
+                role: 'assistant',
+                content: token,
+                model,
+                id: generateUUID(),
+                agentSteps: [],
+              });
+            }
+          }
+          return updated;
+        });
+      }
       if (showStatsRef.current && !serverTimingsRef.current) {
         setTokenCount(prev => prev + Math.ceil(token.length / 4));
         if (!startTimeRef.current) setStartTime(Date.now());
@@ -773,6 +821,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       setStreamingContent('');
       streamingChatIdRef.current = null;
       currentStepTypeRef.current = null;
+      bufferedFinalAnswerRef.current = '';
       if (showStatsRef.current) {
         if (serverTimingsRef.current?.predicted_per_second) {
           setStats({
@@ -923,7 +972,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                 });
               }
               
-              console.log(`Restored processing state from agent-state event for message index ${i} with ${data.steps.length} steps${data.partialFinalAnswer ? ' and partial final answer' : ''}`);
               break;
             }
           }
@@ -954,7 +1002,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
     // Join the chat room AFTER handlers are registered
     socket.emit('join-chat', chatId);
-    console.log(`Joined chat room ${chatId} via WebSocket`);
 
     return () => {
       socket.off('message', onMessage);
@@ -990,13 +1037,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         });
         const data = await res.json();
         if (!isActive) return;
-
-        console.log('Loaded messages:', {
-          messageCount: data.messages?.length,
-          agentState: data.agentState,
-          hasAgentState: !!(data.agentState && data.agentState.steps && data.agentState.steps.length > 0),
-          isComplete: data.agentState?.isComplete,
-        });
 
         const runs = Array.isArray(data.agentRuns) ? data.agentRuns as AgentRun[] : [];
         setAgentRuns(Object.fromEntries(runs.map((run) => [run.id, run])));
@@ -1039,7 +1079,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   agentStepsToRestore = data.agentState.steps.length > messages[i].agentSteps.length 
                     ? data.agentState.steps 
                     : messages[i].agentSteps;
-                  console.log(`Found ongoing response at message index ${i}, restoring with ${agentStepsToRestore.length} steps`);
                   break;
                 }
               }
@@ -1058,9 +1097,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             if (data.agentState?.partialFinalAnswer) {
               setStreamingContent(data.agentState.partialFinalAnswer);
               setCurrentStepType('final_answer');
-              console.log(`Restored processing state: isProcessing=true, processingMessageIndex=${processingIndex}, agentSteps=${agentStepsToRestore.length}, partialFinalAnswer length=${data.agentState.partialFinalAnswer.length}`);
-            } else {
-              console.log(`Restored processing state: isProcessing=true, processingMessageIndex=${processingIndex}, agentSteps=${agentStepsToRestore.length}`);
             }
           }
         }
@@ -1256,8 +1292,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   useEffect(() => {
     // If we're switching to a different chat and there's an active stream for a different chat,
     // clear the streaming state to prevent stale data
-    if (streamingChatIdRef.current && streamingChatIdRef.current !== chatId) {
-      console.log(`Switching from chat ${streamingChatIdRef.current} to ${chatId}, clearing streaming state`);
+   if (streamingChatIdRef.current && streamingChatIdRef.current !== chatId) {
       streamingChatIdRef.current = null;
       setStreamingThoughtContent('');
       streamingThoughtContentRef.current = '';
@@ -2361,6 +2396,15 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </ul>
           </div>
         )}
+
+        {run.status === 'completed' && run.finalAnswer && (
+          <div className="border-t border-white/10 bg-[#0a0a0c] px-4 py-4">
+            <div className="mb-2 font-mono text-xs uppercase tracking-wide text-zinc-500">answer</div>
+            <div className="prose prose-invert max-w-full break-words min-w-0 text-sm text-zinc-200">
+              <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{run.finalAnswer}</ReactMarkdown>
+            </div>
+          </div>
+        )}
       </div>
     );
   };
@@ -2472,37 +2516,15 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const renderMessage = (msg: ChatMessage, idx: number) => {
     const agentRunId = getAgentRunIdFromMessage(msg);
     if (agentRunId) {
-      const run = agentRuns[agentRunId];
       return (
         <React.Fragment key={msg.id || idx}>
-          <div
-            ref={(el) => messageRefs.current.set(idx, el)}
-            className={`${idx === 0 ? 'pt-8' : ''}`}
-          >
-            {renderAgentRunCard(agentRunId)}
-          </div>
-          {run?.finalAnswer && (
-            <div className="mx-auto flex max-w-3xl gap-3 sm:gap-4">
-              <div className="flex-1 min-w-0 space-y-4 text-zinc-300 text-sm leading-relaxed mt-1">
-                <div className="w-fit min-w-0 max-w-full break-words rounded-2xl rounded-tl-sm bg-transparent px-4 py-3 text-zinc-100 shadow-sm sm:px-5 sm:py-3.5">
-                  {run.model && (
-                    <div className="mb-3 flex items-center">
-                      <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
-                        {run.model}
-                      </span>
-                    </div>
-                  )}
-                  <div className="prose prose-invert max-w-full break-words min-w-0">
-                    <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{run.finalAnswer}</ReactMarkdown>
-                    {run.status === 'running' && (
-                      <span className="ml-1 inline-block h-4 w-2 animate-pulse bg-zinc-400 align-text-bottom" />
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </React.Fragment>
+           <div
+             ref={(el) => messageRefs.current.set(idx, el)}
+             className={`${idx === 0 ? 'pt-8' : ''}`}
+           >
+             {renderAgentRunCard(agentRunId)}
+           </div>
+         </React.Fragment>
       );
     }
 

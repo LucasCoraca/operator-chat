@@ -131,6 +131,7 @@ export class SshAgentRunner {
 
   async run(): Promise<void> {
     this.running = true;
+    console.log(`[sshAgent] Starting SSH agent run for session ${this.options.sessionId}, run ${this.options.agentRunId}`);
     this.abortController = new AbortController();
 
     const compactionRunner: CompactionRunner = new LlmCompactionRunner(this.llama, this.sessions, {
@@ -161,11 +162,14 @@ export class SshAgentRunner {
     try {
       while (!this.cancelled && iteration < maxIters) {
         iteration++;
+        console.log(`[sshAgent] Iteration ${iteration} starting`);
 
         // Drain any user steering messages into the DB before reading.
         await this.flushPendingUserMessages();
+        console.log(`[sshAgent] Pending user messages flushed`);
 
         const messages = await this.sessions.listMessagesWithParts(this.options.sessionId);
+        console.log(`[sshAgent] Loaded ${messages.length} messages`);
 
         // Step 3: check compaction. Decision uses the post-filter view's last
         // assistant tokens; we let the compaction runner judge with the
@@ -190,7 +194,9 @@ export class SshAgentRunner {
 
         // Build prompt from the latest snapshot (may include the just-written summary).
         const refreshed = await this.sessions.listMessagesWithParts(this.options.sessionId);
+        console.log(`[sshAgent] Refreshed messages: ${refreshed.length}`);
         const tasks = await this.tasks.listByRun(this.options.chatId, this.options.agentRunId);
+        console.log(`[sshAgent] Tasks: ${tasks.length}`);
         const built = buildPrompt({
           messages: refreshed,
           agentPrompt: this.options.agentPrompt,
@@ -227,7 +233,9 @@ export class SshAgentRunner {
         // the last assistant message is small but the accumulated history +
         // tool definitions push the prompt over context.
         const thresholdTokens = usable({ cfg, model: modelLimits });
+        console.log(`[sshAgent] Counting tokens for ${llmMessages.length} messages`);
         const estimatedPromptTokens = await this.llama.countChatTokens(llmMessages);
+        console.log(`[sshAgent] Estimated prompt tokens: ${estimatedPromptTokens}, threshold: ${thresholdTokens}`);
         if (estimatedPromptTokens >= thresholdTokens) {
           console.log(`[sshAgent] prompt tokens ${estimatedPromptTokens} >= threshold ${thresholdTokens}, triggering compaction`);
           this.compactionPending = true;
@@ -262,6 +270,7 @@ export class SshAgentRunner {
         let streamedText = '';
         let timings: ChatTimings | undefined;
 
+        console.log(`[sshAgent] Calling chatStream with ${llmMessages.length} messages, ${toolDefs.length} tools`);
         const streamResult = await this.llama.chatStream(
           llmMessages,
           (t) => {
@@ -285,6 +294,8 @@ export class SshAgentRunner {
             onReasoningToken: () => {},
           }
         );
+
+        console.log(`[sshAgent] chatStream returned, cancelled: ${this.cancelled}, streamedText: ${streamedText.substring(0, 100)}`);
 
         if (this.cancelled) break;
 

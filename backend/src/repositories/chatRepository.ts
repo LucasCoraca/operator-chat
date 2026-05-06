@@ -162,7 +162,12 @@ export class ChatRepository {
     const id = input.id || crypto.randomUUID();
     await execute(
       `INSERT INTO chat_messages (id, chat_id, role, content, model, agent_steps, message_index)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         content = VALUES(content),
+         model = VALUES(model),
+         agent_steps = VALUES(agent_steps),
+         message_index = VALUES(message_index)`,
       [
         id,
         input.chatId,
