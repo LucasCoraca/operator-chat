@@ -23,7 +23,9 @@ import { computeNextRun, computeNextRunForTask, normalizeDaysOfWeek } from './se
 import { SshAgentRunner } from './agent/v2/sshAgentRunner';
 import { TMP_ROOT as ATTACHMENTS_ROOT } from './agent/v2/outputCap';
 import { MessageID, PartID, SessionID } from './agent/v2/ids';
-import type { UserMessage as V2UserMessage, TextPart as V2TextPart } from './agent/v2/message';
+import type { UserMessage as V2UserMessage, TextPart as V2TextPart, ToolPart as V2ToolPart } from './agent/v2/message';
+import { isToolPart as isV2ToolPart } from './agent/v2/message';
+import type { AgentSession } from './repositories/agentSessionRepository';
 
 // JWT secret for socket.io
 const JWT_SECRET = process.env.JWT_SECRET || 'operator-chat-secret-key-12345';
@@ -1528,7 +1530,7 @@ function buildAgentLedger(session: ChatSession, activeRunId?: string): string {
           const filePath = String(step.actionArgs?.path || '');
           if (filePath) reads.set(filePath, `read in ${run.title}`);
         }
-        if (step.actionName === 'bash') {
+        if (step.actionName === 'bash' || step.actionName === 'shell') {
           const command = String(step.actionArgs?.command || '');
           if (command) commands.push(`${run.title}: ${truncateForAgentContext(command, 300)}`);
         }
@@ -1579,6 +1581,17 @@ function buildSharedAgentContext(session: ChatSession, activeRunId?: string): st
 
   if (recentTrace) {
     sections.push(`## Recent Agent Trace\n${recentTrace}`);
+  }
+
+  // Surface the SSH agent's final-answer text per run. The trace projection
+  // intentionally stores it outside `run.steps` (it goes to the chat bubble),
+  // so without this block the chat ReAct never sees the agent's actual
+  // conclusion — only that some commands ran and files moved.
+  const conclusions = recentRuns
+    .filter((run) => run.id !== activeRunId && run.finalAnswer && run.finalAnswer.trim())
+    .map((run) => `### ${run.title} (${run.status})\n${truncateForAgentContext(run.finalAnswer!.trim(), 2000)}`);
+  if (conclusions.length > 0) {
+    sections.push(`## Recent Agent Conclusions\n${conclusions.join('\n\n')}`);
   }
 
   return sections.join('\n\n');
@@ -1689,6 +1702,158 @@ function startTaskScheduler(): void {
   pollScheduledTasks().catch(console.error);
 }
 
+// Build the SshAgentRunner with the standard host-side wiring (socket events,
+// approval gate, question/launch bridges) and start it asynchronously. Used by
+// both `startChatAgentRun` (fresh run) and `resumeAgentRun` (existing
+// agent_session). The IIFE returns immediately; the runner runs in the
+// background until it completes, errors, or is cancelled.
+function spawnAndRunSshAgentRunner(args: {
+  session: ChatSession;
+  run: AgentRun;
+  agentSession: AgentSession;
+  userId: string;
+  workspace: WorkspaceConfig;
+  language?: string;
+  sourceSocketChatId: string;
+  agentModel: string;
+  agentPrompt: string;
+  workspaceRoot: string;
+  contextWindowTokens?: number;
+  reservedOutputTokens?: number;
+  autoCompactThreshold?: number;
+}): void {
+  const {
+    session, run, agentSession, userId, workspace, language,
+    sourceSocketChatId, agentModel, agentPrompt, workspaceRoot,
+    contextWindowTokens, reservedOutputTokens, autoCompactThreshold,
+  } = args;
+
+  const runner = new SshAgentRunner(
+    llamaClient,
+    agentSessionRepository,
+    agentRunTaskRepository,
+    {
+      sessionId: agentSession.id,
+      chatId: session.id,
+      agentRunId: run.id,
+      userId,
+      sandboxId: session.sandboxId,
+      agent: 'ssh-agent',
+      workspace,
+      agentPrompt,
+      modelID: agentModel,
+      providerID: 'llama',
+      cwd: workspaceRoot,
+      root: workspaceRoot,
+      language,
+      contextWindowTokens,
+      reservedOutputTokens,
+      autoCompactThreshold,
+    },
+    {
+      onPartsUpdated: (steps, finalAnswer) => {
+        run.steps = steps;
+        run.finalAnswer = finalAnswer;
+        run.updatedAt = new Date().toISOString();
+        io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+        scheduleChatSave(session);
+      },
+      onStep: () => {},
+      onAssistantToken: () => {},
+      onTimings: (timings) => {
+        io.to(sourceSocketChatId).emit('timings', timings);
+      },
+      onToolApprovalRequest: async (approvalRequest: ToolApprovalRequest) => {
+        const latestSettings = await getUserSettings(userId);
+        if (latestSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
+          return { approved: true, reason: 'approved' };
+        }
+        return await new Promise<ToolApprovalResponse>((resolve) => {
+          pendingApprovals.set(approvalRequest.approvalId, {
+            chatId: sourceSocketChatId,
+            request: approvalRequest,
+            resolve,
+          });
+          io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
+        });
+      },
+      onTasksUpdated: (chatId, agentRunId, tasks) => {
+        io.to(sourceSocketChatId).emit('agent-tasks-updated', { chatId, agentRunId, tasks });
+      },
+      onWorkspaceChanged: (hint) => {
+        io.to(userId).emit('remote-workspace-changed', hint);
+      },
+      onAskUserQuestion: async (request) => {
+        return await new Promise<{ answer: string | string[]; answered: boolean } | null>((resolve) => {
+          const payload: PendingQuestionPayload = {
+            chatId: sourceSocketChatId,
+            agentRunId: run.id,
+            questionId: request.questionId,
+            question: request.question,
+            options: request.options ?? [],
+            multiple: Boolean(request.multiple),
+            allowCustomAnswer: Boolean(request.allowCustomAnswer),
+            timeoutMs: request.timeoutMs,
+          };
+          pendingQuestions.set(request.questionId, { payload, resolve });
+          io.to(sourceSocketChatId).emit('agent-question-required', payload);
+          if (request.timeoutMs && request.timeoutMs > 0) {
+            setTimeout(() => {
+              if (pendingQuestions.has(request.questionId)) {
+                pendingQuestions.delete(request.questionId);
+                resolve({ answer: '', answered: false });
+                io.to(sourceSocketChatId).emit('agent-question-resolved', {
+                  chatId: sourceSocketChatId,
+                  agentRunId: run.id,
+                  questionId: request.questionId,
+                });
+              }
+            }, request.timeoutMs);
+          }
+        });
+      },
+      onComplete: (finalAnswer) => {
+        run.finalAnswer = finalAnswer ?? run.finalAnswer ?? null;
+        run.status = run.status === 'cancelled' ? 'cancelled' : 'completed';
+        run.updatedAt = new Date().toISOString();
+        io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+        void flushScheduledChatSave(session).catch(console.error);
+      },
+      onError: (error) => {
+        if (run.status !== 'cancelled') {
+          run.status = 'failed';
+          run.error = error;
+        }
+        run.updatedAt = new Date().toISOString();
+        io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+        void flushScheduledChatSave(session).catch(console.error);
+      },
+    }
+  );
+
+  runningAgentRuns.set(run.id, {
+    kind: 'ssh-v2',
+    agent: runner,
+    session,
+    run,
+    sourceSocketChatId,
+    sessionId: agentSession.id,
+  });
+
+  console.log(`[sshAgent] Starting runner for run ${run.id} (session ${agentSession.id})`);
+  void (async () => {
+    try {
+      await runner.run();
+    } catch (error) {
+      console.error(`[sshAgent] runner error for run ${run.id}:`, error);
+    } finally {
+      runningAgentRuns.delete(run.id);
+      clearPendingApprovalsForChat(sourceSocketChatId);
+      clearPendingQuestionsForRun(run.id, true);
+    }
+  })();
+}
+
 async function startChatAgentRun(
   session: ChatSession,
   userId: string,
@@ -1771,146 +1936,142 @@ async function startChatAgentRun(
   };
   await agentSessionRepository.upsertPart(initialUserPart);
 
-  const runner = new SshAgentRunner(
-    llamaClient,
-    agentSessionRepository,
-    agentRunTaskRepository,
-    {
-      sessionId: agentSession.id,
-      chatId: session.id,
-      agentRunId: run.id,
-      userId,
-      sandboxId: session.sandboxId,
-      agent: 'ssh-agent',
-      workspace,
-      agentPrompt,
-      modelID: agentModel,
-      providerID: 'llama',
-      cwd: request.workspaceRoot,
-      root: request.workspaceRoot,
-      language,
-      contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
-      reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
-      autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
-    },
-    {
-      onPartsUpdated: (steps, finalAnswer) => {
-        run.steps = steps;
-        // Allow null to clear the bubble — intermediate narration lives in
-        // the trace as a `thought` step, not the chat bubble.
-        run.finalAnswer = finalAnswer;
-        run.updatedAt = new Date().toISOString();
-        io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-        scheduleChatSave(session);
-      },
-      onStep: () => {
-        // onPartsUpdated already emits the full state. Step events here are
-        // useful for the UI's per-step animation but we keep them silent for
-        // now since the legacy ChatInterface listens to agent-run-updated.
-      },
-      onAssistantToken: () => {
-        // No-op: streamed tokens are persisted as a TextPart at the end of
-        // each iteration. The next emitProjection() decides whether they
-        // belong in the trace (thought step) or the chat bubble (final
-        // answer). Streaming directly into run.finalAnswer would poison the
-        // bubble with intermediate narration that we then have to clear.
-      },
-      onTimings: (timings) => {
-        io.to(sourceSocketChatId).emit('timings', timings);
-      },
-      onToolApprovalRequest: async (approvalRequest: ToolApprovalRequest) => {
-        const latestSettings = await getUserSettings(userId);
-        if (latestSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
-          return { approved: true, reason: 'approved' };
-        }
-        return await new Promise<ToolApprovalResponse>((resolve) => {
-          pendingApprovals.set(approvalRequest.approvalId, {
-            chatId: sourceSocketChatId,
-            request: approvalRequest,
-            resolve,
-          });
-          io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
-        });
-      },
-      onTasksUpdated: (chatId, agentRunId, tasks) => {
-        io.to(sourceSocketChatId).emit('agent-tasks-updated', { chatId, agentRunId, tasks });
-      },
-      onWorkspaceChanged: (hint) => {
-        io.to(userId).emit('remote-workspace-changed', hint);
-      },
-      onAskUserQuestion: async (request) => {
-        return await new Promise<{ answer: string | string[]; answered: boolean } | null>((resolve) => {
-          const payload: PendingQuestionPayload = {
-            chatId: sourceSocketChatId,
-            agentRunId: run.id,
-            questionId: request.questionId,
-            question: request.question,
-            options: request.options ?? [],
-            multiple: Boolean(request.multiple),
-            allowCustomAnswer: Boolean(request.allowCustomAnswer),
-            timeoutMs: request.timeoutMs,
-          };
-          pendingQuestions.set(request.questionId, { payload, resolve });
-          io.to(sourceSocketChatId).emit('agent-question-required', payload);
-          if (request.timeoutMs && request.timeoutMs > 0) {
-            setTimeout(() => {
-              if (pendingQuestions.has(request.questionId)) {
-                pendingQuestions.delete(request.questionId);
-                resolve({ answer: '', answered: false });
-                io.to(sourceSocketChatId).emit('agent-question-resolved', {
-                  chatId: sourceSocketChatId,
-                  agentRunId: run.id,
-                  questionId: request.questionId,
-                });
-              }
-            }, request.timeoutMs);
-          }
-        });
-      },
-      onComplete: (finalAnswer) => {
-        // The aggregated answer from the projection is the source of truth.
-        // Fall back to whatever onPartsUpdated set if the runner passes null.
-        run.finalAnswer = finalAnswer ?? run.finalAnswer ?? null;
-        run.status = run.status === 'cancelled' ? 'cancelled' : 'completed';
-        run.updatedAt = new Date().toISOString();
-        io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-        void flushScheduledChatSave(session).catch(console.error);
-      },
-      onError: (error) => {
-        if (run.status !== 'cancelled') {
-          run.status = 'failed';
-          run.error = error;
-        }
-        run.updatedAt = new Date().toISOString();
-        io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-        void flushScheduledChatSave(session).catch(console.error);
-      },
-    }
-  );
-
-  runningAgentRuns.set(run.id, {
-    kind: 'ssh-v2',
-    agent: runner,
+  spawnAndRunSshAgentRunner({
     session,
     run,
+    agentSession,
+    userId,
+    workspace,
+    language,
     sourceSocketChatId,
-    sessionId: agentSession.id,
+    agentModel,
+    agentPrompt,
+    workspaceRoot: request.workspaceRoot,
+    contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+    reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+    autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
   });
 
-  console.log(`[startChatAgentRun] Starting SSH agent runner for run ${run.id}`);
-  void (async () => {
-    try {
-      await runner.run();
-    } catch (error) {
-      console.error(`[startChatAgentRun] SSH agent runner error for run ${run.id}:`, error);
-    } finally {
-      runningAgentRuns.delete(run.id);
-      clearPendingApprovalsForChat(sourceSocketChatId);
-      clearPendingQuestionsForRun(run.id, true);
-    }
-  })();
-
   return run.id;
+}
+
+// Resume a previously stopped (cancelled / failed) SSH agent run. The
+// agent_session row + every persisted message and part is reused; only any
+// dangling pending/running ToolParts are flipped to `error` so the LLM
+// doesn't see ghost states. A `<system-reminder>` user message is appended
+// announcing the resume so the model orients itself before the next turn.
+async function resumeAgentRun(
+  runId: string,
+  userId: string,
+  sourceSocketChatId: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (runningAgentRuns.has(runId)) {
+    return { ok: false, reason: 'Run is already active.' };
+  }
+
+  let foundSession: ChatSession | undefined;
+  let foundRun: AgentRun | undefined;
+  for (const session of chatSessions.values()) {
+    if (session.userId !== userId) continue;
+    const run = session.agentRuns.find((r) => r.id === runId);
+    if (run) {
+      foundSession = session;
+      foundRun = run;
+      break;
+    }
+  }
+  if (!foundSession || !foundRun) {
+    return { ok: false, reason: 'Run not found.' };
+  }
+  if (foundRun.status === 'completed') {
+    return { ok: false, reason: 'Run is already completed.' };
+  }
+  if (foundRun.status === 'running') {
+    return { ok: false, reason: 'Run is already running.' };
+  }
+
+  const userSettings = await getUserSettings(userId);
+  const workspace = getWorkspaceConfigForRoot(foundRun.workspaceRoot, userSettings.remoteWorkspace);
+  if (!workspace?.ssh?.enabled) {
+    return { ok: false, reason: 'Remote workspace is no longer configured.' };
+  }
+
+  const agentSession = await agentSessionRepository.findSessionByAgentRunId(runId);
+  if (!agentSession) {
+    return { ok: false, reason: 'No persisted session found for this run.' };
+  }
+
+  // Sanitize dangling tool parts left behind when the previous run was
+  // killed mid-flight. Pending/running parts confuse the next LLM turn
+  // because the prompt builder renders them as "[Tool still running]" /
+  // "[Tool pending]" forever.
+  const messagesWithParts = await agentSessionRepository.listMessagesWithParts(agentSession.id);
+  for (const msg of messagesWithParts) {
+    for (const part of msg.parts) {
+      if (!isV2ToolPart(part)) continue;
+      if (part.state.status !== 'pending' && part.state.status !== 'running') continue;
+      const startedAt =
+        part.state.status === 'running' && part.state.time?.start
+          ? part.state.time.start
+          : Date.now();
+      const repaired: V2ToolPart = {
+        ...part,
+        state: {
+          status: 'error',
+          input: part.state.input,
+          error: 'Run was interrupted before this tool finished. Resumed.',
+          time: { start: startedAt, end: Date.now() },
+        },
+      };
+      await agentSessionRepository.upsertPart(repaired);
+    }
+  }
+
+  // Append a synthetic user message so the next iteration's prompt opens
+  // with a clear cue that the run is being resumed.
+  const resumeMessageId: string = MessageID.ascending();
+  await agentSessionRepository.upsertMessage({
+    id: resumeMessageId,
+    sessionID: agentSession.id,
+    role: 'user',
+    time: { created: Date.now() },
+    agent: 'ssh-agent',
+    model: { providerID: 'llama', modelID: foundRun.model || userSettings.remoteWorkspace.agentModel || '' },
+  } as V2UserMessage);
+  await agentSessionRepository.upsertPart({
+    id: PartID.ascending(),
+    sessionID: agentSession.id,
+    messageID: resumeMessageId,
+    type: 'text',
+    text:
+      '<system-reminder>\nThis run is being resumed after an interruption. ' +
+      'Inspect the trace above to see what was already done, then continue from where you left off — emit the next tool call needed to make progress, ' +
+      'or call `transition_to_compose_mode` if every Success Criterion is already met.\n</system-reminder>',
+  } as V2TextPart);
+
+  // Flip run state and surface the resumed status to the UI.
+  foundRun.status = 'running';
+  foundRun.error = undefined;
+  foundRun.updatedAt = new Date().toISOString();
+  io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(foundRun));
+  scheduleChatSave(foundSession);
+
+  spawnAndRunSshAgentRunner({
+    session: foundSession,
+    run: foundRun,
+    agentSession,
+    userId,
+    workspace,
+    sourceSocketChatId,
+    agentModel: foundRun.model || userSettings.remoteWorkspace.agentModel || '',
+    agentPrompt: foundRun.prompt,
+    workspaceRoot: foundRun.workspaceRoot,
+    contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+    reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+    autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
+  });
+
+  return { ok: true };
 }
 
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
@@ -3142,6 +3303,34 @@ io.on('connection', (socket) => {
       }
     } else {
       console.log(`No active agent found for chat ${chatId} or unauthorized`);
+    }
+  });
+
+  socket.on('resume-agent-run', async (data: { chatId: string; runId: string }) => {
+    if (!currentUserId) {
+      socket.emit('error', { message: 'Not authenticated' });
+      return;
+    }
+    const chatId = String(data?.chatId || '').trim();
+    const runId = String(data?.runId || '').trim();
+    if (!chatId || !runId) {
+      socket.emit('error', { message: 'chatId and runId are required' });
+      return;
+    }
+    const session = chatSessions.get(chatId);
+    if (!session || session.userId !== currentUserId) {
+      socket.emit('error', { message: 'Chat not found' });
+      return;
+    }
+    try {
+      const result = await resumeAgentRun(runId, currentUserId, chatId);
+      if (!result.ok) {
+        socket.emit('error', { message: `Cannot resume agent run: ${result.reason}` });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[resume-agent-run] failed for run ${runId}:`, error);
+      socket.emit('error', { message: `Resume failed: ${message}` });
     }
   });
 

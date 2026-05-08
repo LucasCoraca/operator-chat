@@ -57,6 +57,7 @@ export interface BrowserSessionResult {
 }
 
 export type BrowserSubAction =
+  | { action: 'visit'; url: string; bypass_cache?: boolean; timeout_ms?: number }
   | { action: 'click'; selector: string }
   | { action: 'type'; selector: string; text: string; submit?: boolean }
   | { action: 'scroll'; scroll_y?: number }
@@ -617,6 +618,20 @@ export class BrowserClient {
     for (const a of actions) {
       try {
         switch (a.action) {
+          case 'visit': {
+            if (a.bypass_cache) await state.page.setCacheEnabled(false);
+            try {
+              await state.page.goto(a.url, {
+                waitUntil: 'networkidle2',
+                timeout: typeof a.timeout_ms === 'number' ? a.timeout_ms : 30_000,
+              });
+            } finally {
+              if (a.bypass_cache) await state.page.setCacheEnabled(true);
+            }
+            results.push({ action: `visit ${a.url}${a.bypass_cache ? ' (hard)' : ''}`, success: true });
+            await captureFrame();
+            break;
+          }
           case 'screenshot': {
             const s = await this.takeScreenshot(state);
             if (s) screenshotPaths.push(s);

@@ -153,6 +153,14 @@ export class AgentSessionRepository {
     return normalizeSession(row);
   }
 
+  async findSessionByAgentRunId(agentRunId: string): Promise<AgentSession | null> {
+    const row = await queryOne<RawSessionRow>(
+      'SELECT * FROM agent_sessions WHERE agent_run_id = ? ORDER BY created_at DESC LIMIT 1',
+      [agentRunId]
+    );
+    return normalizeSession(row);
+  }
+
   async listSessionsForChat(chatId: string): Promise<AgentSession[]> {
     const rows = await query<RawSessionRow>(
       'SELECT * FROM agent_sessions WHERE chat_id = ? ORDER BY created_at DESC',

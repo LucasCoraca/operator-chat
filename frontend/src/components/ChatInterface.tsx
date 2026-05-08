@@ -139,7 +139,8 @@ interface Message {
   agentRunId?: string;
 }
 
-function getAgentRunIdFromMessage(message: Pick<Message, 'content' | 'agentRunId'>) {
+function getAgentRunIdFromMessage(message: Pick<Message, 'content' | 'agentRunId'> | undefined) {
+  if (!message) return undefined;
   return message.agentRunId
     || (message.content.startsWith('__operator_agent_run__:')
       ? message.content.slice('__operator_agent_run__:'.length).trim()
@@ -1615,6 +1616,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     setAgentSteeringDrafts((current) => ({ ...current, [runId]: '' }));
   };
 
+  const resumeAgentRun = (runId: string) => {
+    if (!socket) return;
+    socket.emit('resume-agent-run', { chatId, runId });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -2339,6 +2345,25 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         {run.error && (
           <div className="border-t border-red-500/20 bg-red-500/10 px-4 py-3 font-mono text-sm text-red-200">
             {run.error}
+          </div>
+        )}
+
+        {(run.status === 'cancelled' || run.status === 'failed') && (
+          <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-[#0d0d0f] px-4 py-3">
+            <div className="text-xs text-zinc-400">
+              This run stopped before finishing. You can resume from where it left off.
+            </div>
+            <button
+              type="button"
+              onClick={() => resumeAgentRun(run.id)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-200 transition-colors hover:bg-emerald-500/20"
+            >
+              <svg className="size-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Resume
+            </button>
           </div>
         )}
 

@@ -265,8 +265,18 @@ export class LlmCompactionRunner implements CompactionRunner {
         { model: this.options.model }
       );
       const text = (result.finalContent || '').trim();
-      return text || undefined;
-    } catch {
+      if (!text) {
+        console.warn(
+          `[compaction] Summarizer returned empty content (head=${head.length} msgs, prompt=${messages.length} msgs).`
+        );
+        return undefined;
+      }
+      return text;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[compaction] Summarizer threw (head=${head.length} msgs, prompt=${messages.length} msgs): ${msg}`
+      );
       return undefined;
     }
   }

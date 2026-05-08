@@ -37,10 +37,21 @@ export const SSH_AGENT_TOOLS = [
   'browser',
   'todo',
   'question',
+  'transition_to_compose_mode',
   'invalid',
 ] as const;
 
 export type SshAgentToolName = (typeof SSH_AGENT_TOOLS)[number];
+
+// Tools the LLM is told about and offered as native function definitions.
+// `task` is excluded because the host doesn't yet wire `launchSubagent`, so
+// calling it always errors out and confuses the planner. `invalid` is the
+// runner's internal fallback for malformed tool calls and should never be
+// invoked deliberately. The full registry below still contains them for
+// internal lookup (e.g. the runner adapts an unknown call to `invalid`).
+const HIDDEN_FROM_LLM = new Set<SshAgentToolName>(['task', 'invalid']);
+export const PUBLISHED_SSH_AGENT_TOOLS: readonly SshAgentToolName[] =
+  SSH_AGENT_TOOLS.filter((name) => !HIDDEN_FROM_LLM.has(name));
 
 export interface SshAgentToolPolicy {
   /** Show an approval prompt before running this tool. */
@@ -166,6 +177,30 @@ async function readFilesAlreadyRead(
     }
   }
   return paths;
+}
+
+// Map of normalized path → most recent successful `write` content for that
+// path in the current run. Used by the write tool to short-circuit byte-
+// identical re-writes that the LLM sometimes emits when stuck.
+async function lastWrittenContentByPath(
+  sessions: AgentSessionRepository,
+  sessionId: string
+): Promise<Map<string, string>> {
+  const messages = await sessions.listMessagesWithParts(sessionId);
+  const last = new Map<string, string>();
+  for (const msg of messages) {
+    for (const part of msg.parts) {
+      if (!isToolPart(part)) continue;
+      if (part.tool !== 'write') continue;
+      if (part.state.status !== 'completed') continue;
+      const p = part.state.input?.path;
+      const c = part.state.input?.content;
+      if (typeof p === 'string' && p.length > 0 && typeof c === 'string') {
+        last.set(normalizeForCompare(p), c);
+      }
+    }
+  }
+  return last;
 }
 
 function normalizeForCompare(p: string): string {
@@ -319,9 +354,23 @@ const writeTool: SshAgentTool = {
       return capResult('write', 'Error: content is required', true);
     }
 
+    const content = String(args.content);
     const reads = await readFilesAlreadyRead(sessions, context.sessionId);
+    const writes = await lastWrittenContentByPath(sessions, context.sessionId);
     const target = normalizeForCompare(filePath);
-    const fileExistedBefore = reads.has(target);
+    const fileExistedBefore = reads.has(target) || writes.has(target);
+
+    // Short-circuit byte-identical re-writes. The LLM sometimes loops on the
+    // same file with the same content (especially after a tool error elsewhere).
+    // Returning a no-op stops the loop without corrupting the file.
+    const previouslyWritten = writes.get(target);
+    if (previouslyWritten !== undefined && previouslyWritten === content) {
+      return capResult(
+        'write',
+        `(no change — ${filePath} was already written with identical content earlier in this run; do not re-write the same file. Move on to the next step.)`,
+        false
+      );
+    }
 
     try {
       const runtime = getRuntime(context.workspace);
@@ -342,7 +391,6 @@ const writeTool: SshAgentTool = {
           // file does not exist — proceed to create.
         }
       }
-      const content = String(args.content);
       const result = await runtime.writeFile(filePath, content);
       return capResult('write', result, false);
     } catch (error) {
@@ -503,6 +551,20 @@ const todoTool: SshAgentTool = {
         priority,
       });
     }
+
+    // Short-circuit when the requested list matches the persisted state — the
+    // model often re-emits an unchanged todo block while spinning. Returning
+    // a brief no-op observation skips the DB write, the socket emit, and (most
+    // importantly) avoids piling another full snapshot into the prompt history.
+    const existing = await tasks.listByRun(context.chatId, context.agentRunId);
+    if (todoListMatches(existing, items)) {
+      return capResult(
+        'todo',
+        '(no change — todo list already matches the requested state; do real work before updating todos again)',
+        false
+      );
+    }
+
     const updated = await tasks.replaceAll(context.chatId, context.agentRunId, items);
     context.emitTasksUpdated?.(context.chatId, context.agentRunId, updated);
     const lines = updated.map((task) => {
@@ -515,6 +577,18 @@ const todoTool: SshAgentTool = {
     return capResult('todo', lines.length ? lines.join('\n') : '(empty todo list)', false);
   },
 };
+
+function todoListMatches(existing: AgentRunTask[], desired: TodoListItem[]): boolean {
+  if (existing.length !== desired.length) return false;
+  for (let i = 0; i < existing.length; i++) {
+    const a = existing[i];
+    const b = desired[i];
+    if (a.subject !== b.content) return false;
+    if (a.status !== b.status) return false;
+    if (a.priority !== b.priority) return false;
+  }
+  return true;
+}
 
 const questionTool: SshAgentTool = {
   name: 'question',
@@ -619,17 +693,43 @@ const BROWSER_DIRECT_ACTIONS = [
   'visit', 'click', 'type', 'scroll', 'select',
   'press', 'hover', 'focus', 'clear', 'evaluate',
   'back', 'forward', 'reload', 'wait_for',
-  'actions',
+  'batch',
 ] as const;
 
 const browserTool: SshAgentTool = {
   name: 'browser',
   description:
-    'Drive a headless Chromium page. Call once per action, or use action=actions with a sub-action array to chain steps in a single call. Every action returns: page URL/title, rendered text, a screenshot (animated when batched), captured network activity, and console logs. Actions: visit (load URL) | click | type (with optional submit:true to press Enter) | clear (empty an input) | press (keyboard key, optionally focus selector first) | hover | focus | scroll | select (<select> by value) | wait_for (selector to appear/disappear) | evaluate (run async JS, returns serialized value) | back | forward | reload | actions (batch). Use action=actions with a list of sub-actions to avoid round-trips for sequences.',
+    'Drive a headless Chromium page. PREFER action="batch" with a steps[] array whenever you have more than one step in mind (visit → type → click → wait_for). One call, one round-trip, one animated screenshot sequence. Only fall back to a single-step call when the next step genuinely depends on what you observe in the current screenshot/text. Example: action="batch", steps=[{"action":"visit","url":"http://host:3000"},{"action":"type","selector":"#q","text":"hello","submit":true},{"action":"wait_for","selector":".results"}]. Single-step actions: visit | click | type (submit:true presses Enter) | clear | press (any key) | hover | focus | scroll | select (<select> by value) | wait_for (selector visible/hidden) | evaluate (async JS, returns serialized value) | back | forward | reload. Every call returns page URL/title, rendered text, screenshot(s), captured network, and console logs.',
   parameters: {
     type: 'object',
     properties: {
       action: { type: 'string', description: BROWSER_DIRECT_ACTIONS.join(' | ') },
+      steps: {
+        type: 'array',
+        description: 'Used with action="batch". Ordered list of sub-steps executed in sequence; one screenshot is captured per step and returned as an animated sequence. STRONGLY PREFERRED over multiple single-step calls whenever you can plan the next 2+ steps without needing to read intermediate output.',
+        items: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              enum: ['visit', 'click', 'type', 'scroll', 'wait', 'select', 'screenshot', 'press', 'hover', 'focus', 'clear', 'evaluate', 'back', 'forward', 'reload', 'wait_for'],
+            },
+            url: { type: 'string', description: 'For sub-action=visit: URL to load.' },
+            selector: { type: 'string' },
+            text: { type: 'string' },
+            submit: { type: 'boolean' },
+            scroll_y: { type: 'number' },
+            ms: { type: 'number', description: 'Sleep duration for sub-action=wait.' },
+            value: { type: 'string' },
+            key: { type: 'string' },
+            script: { type: 'string' },
+            timeout_ms: { type: 'number' },
+            hidden: { type: 'boolean' },
+            bypass_cache: { type: 'boolean', description: 'For sub-action=reload: hard refresh ignoring HTTP cache.' },
+          },
+          required: ['action'],
+        },
+      },
       url: { type: 'string', description: 'URL to load (action=visit).' },
       selector: { type: 'string', description: 'CSS selector (click/type/select/press/hover/focus/clear/wait_for).' },
       text: { type: 'string', description: 'Text to type (action=type).' },
@@ -641,31 +741,6 @@ const browserTool: SshAgentTool = {
       timeout_ms: { type: 'number', description: 'Wait timeout in milliseconds (action=wait_for, default 10000).' },
       hidden: { type: 'boolean', description: 'For wait_for: wait until the element is hidden/removed instead of visible.' },
       bypass_cache: { type: 'boolean', description: 'For visit/reload: hard refresh — disable HTTP cache for this navigation so JS/CSS/HTML are re-fetched fresh. Use after editing files when a normal reload still serves stale code. Default false (use cache, faster).' },
-      actions: {
-        type: 'array',
-        description: 'Batch of sub-actions executed in sequence (action=actions). Each sub-action has the same fields as the top-level action.',
-        items: {
-          type: 'object',
-          properties: {
-            action: {
-              type: 'string',
-              enum: ['click', 'type', 'scroll', 'wait', 'select', 'screenshot', 'press', 'hover', 'focus', 'clear', 'evaluate', 'back', 'forward', 'reload', 'wait_for'],
-            },
-            selector: { type: 'string' },
-            text: { type: 'string' },
-            submit: { type: 'boolean' },
-            scroll_y: { type: 'number' },
-            ms: { type: 'number', description: 'Sleep duration for action=wait.' },
-            value: { type: 'string' },
-            key: { type: 'string' },
-            script: { type: 'string' },
-            timeout_ms: { type: 'number' },
-            hidden: { type: 'boolean' },
-            bypass_cache: { type: 'boolean', description: 'For sub-action=reload: hard refresh ignoring HTTP cache.' },
-          },
-          required: ['action'],
-        },
-      },
       include_network: { type: 'boolean', description: 'Include captured network activity.' },
       include_console: { type: 'boolean', description: 'Include captured console logs.' },
     },
@@ -679,12 +754,12 @@ const browserTool: SshAgentTool = {
 
     let result: BrowserSessionResult;
 
-    if (action === 'actions') {
-      const batch = args.actions;
-      if (!Array.isArray(batch) || batch.length === 0) {
-        return capResult('browser', 'Error: "actions" requires an array of sub-actions', true);
+    if (action === 'batch') {
+      const steps = args.steps;
+      if (!Array.isArray(steps) || steps.length === 0) {
+        return capResult('browser', 'Error: "batch" requires a steps[] array of sub-actions', true);
       }
-      result = await client.sessionActions(sessionKey, batch as BrowserSubAction[], true);
+      result = await client.sessionActions(sessionKey, steps as BrowserSubAction[], true);
     } else if (!BROWSER_DIRECT_ACTIONS.includes(action as any)) {
       return capResult('browser', `Error: action must be one of ${BROWSER_DIRECT_ACTIONS.join(' | ')}`, true);
     } else if (action === 'visit') {
@@ -768,6 +843,23 @@ const browserTool: SshAgentTool = {
   },
 };
 
+const transitionToComposeModeTool: SshAgentTool = {
+  name: 'transition_to_compose_mode',
+  description:
+    'Call this exactly once, after every Success Criterion is met and Required Verification has passed, to switch from RESEARCH mode to COMPOSE mode. The next turn will be in COMPOSE mode where you write the final answer to the user as plain assistant text. Do NOT call this while implementation, file edits, builds, tests, browser checks, or any other verification still need to happen — keep calling tools instead.',
+  parameters: { type: 'object', properties: {}, required: [] },
+  policy: { requiresApproval: false, riskLevel: 'low' },
+  // Intercepted by the runner before this executor runs. The body here is a
+  // safety net in case the interception path is ever bypassed.
+  execute: async () => {
+    return capResult(
+      'transition_to_compose_mode',
+      'Mode transition acknowledged. The next turn is COMPOSE mode — write the final answer as plain assistant text without calling tools.',
+      false
+    );
+  },
+};
+
 const invalidTool: SshAgentTool = {
   name: 'invalid',
   description: 'Internal fallback tool for invalid tool calls. Do not call this directly.',
@@ -795,6 +887,7 @@ const TOOLS: Record<SshAgentToolName, SshAgentTool> = {
   browser: browserTool,
   todo: todoTool,
   question: questionTool,
+  transition_to_compose_mode: transitionToComposeModeTool,
   invalid: invalidTool,
 };
 
@@ -803,7 +896,7 @@ export function getSshAgentTool(name: string): SshAgentTool | undefined {
 }
 
 export function getSshAgentToolDefinitions(): ToolDefinition[] {
-  return SSH_AGENT_TOOLS.map((name) => {
+  return PUBLISHED_SSH_AGENT_TOOLS.map((name) => {
     const tool = TOOLS[name];
     return {
       type: 'function' as const,

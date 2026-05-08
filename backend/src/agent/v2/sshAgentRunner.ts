@@ -61,8 +61,6 @@ export interface SshAgentRunnerOptions {
   contextWindowTokens?: number;
   reservedOutputTokens?: number;
   autoCompactThreshold?: number;
-  /** Hard ceiling on iterations to avoid runaway loops. */
-  maxIterations?: number;
 }
 
 export interface SshAgentCallbacks {
@@ -90,17 +88,36 @@ export interface SshAgentCallbacks {
   onError?: (error: string) => void;
 }
 
+type SshAgentMode = 'research' | 'compose';
+
 export class SshAgentRunner {
   private cancelled = false;
   private running = false;
   private abortController: AbortController | null = null;
   private pendingUserMessages: string[] = [];
   private compactionPending = false;
-  // Tracks consecutive iterations that produced narration but no tool call.
-  // Thinking models sometimes describe an action without committing to one;
-  // we re-prompt up to MAX_NO_TOOL_RETRIES times before treating as final.
-  private consecutiveNoToolRetries = 0;
-  private readonly MAX_NO_TOOL_RETRIES = 2;
+  // Set when a compaction attempt returns compacted=false (e.g. the summarizer
+  // LLM call failed or there's no head/tail to split). Once set, the runner
+  // stops re-triggering compaction and forces COMPOSE so the run can wrap up
+  // gracefully instead of spinning on a no-op pre-send check.
+  private compactionExhausted = false;
+  // Two-mode loop, mirroring the chat ReAct agent. RESEARCH allows only tool
+  // calls; COMPOSE allows only the final-answer text. The model switches by
+  // calling the `transition_to_compose_mode` tool. The mode is also surfaced
+  // to the LLM via the trailing dynamic-state block on every iteration.
+  private currentMode: SshAgentMode = 'research';
+  // Tracks consecutive turns in RESEARCH that produced no usable tool call.
+  // After this many retries, the runner force-transitions to COMPOSE so the
+  // user gets *some* answer instead of a stuck loop.
+  private consecutiveResearchTextRetries = 0;
+  private readonly MAX_RESEARCH_TEXT_RETRIES = 2;
+  // Guards against the model spinning on a single tool (typically `todo` or
+  // `read`) for many turns in a row without making progress. Once the streak
+  // hits SAME_TOOL_STREAK_LIMIT we inject a one-shot steering reminder.
+  private lastToolName: string | null = null;
+  private sameToolStreak = 0;
+  private sameToolReminderSent = false;
+  private readonly SAME_TOOL_STREAK_LIMIT = 3;
 
   constructor(
     private readonly llama: LlamaClient,
@@ -156,11 +173,14 @@ export class SshAgentRunner {
       },
     };
 
-    const maxIters = this.options.maxIterations ?? 200;
     let iteration = 0;
 
+    // The SSH agent runs unbounded by design — long coding tasks (multi-file
+    // builds, debug-fix-verify loops) routinely take many iterations and the
+    // user-cancel button is the intended off-switch. The chat ReAct agent
+    // keeps its own iteration cap; this one does not.
     try {
-      while (!this.cancelled && iteration < maxIters) {
+      while (!this.cancelled) {
         iteration++;
         console.log(`[sshAgent] Iteration ${iteration} starting`);
 
@@ -184,11 +204,15 @@ export class SshAgentRunner {
           cfg,
           model: modelLimits,
         };
-        if (compactionRunner.shouldCompact(messages, compactionContext)) {
+        if (!this.compactionExhausted && compactionRunner.shouldCompact(messages, compactionContext)) {
           this.compactionPending = true;
-          await compactionRunner.run(messages, compactionContext);
+          const result = await compactionRunner.run(messages, compactionContext);
           this.compactionPending = false;
           await this.emitProjection(); // surface the compaction marker to the UI
+          if (!result.compacted) {
+            this.markCompactionExhausted('shouldCompact');
+            continue;
+          }
           continue;
         }
 
@@ -203,6 +227,7 @@ export class SshAgentRunner {
           workspace: this.options.workspace,
           tasks,
           now: new Date(),
+          mode: this.currentMode,
         });
 
         // The static system prompt is identical across all iterations, so
@@ -223,29 +248,47 @@ export class SshAgentRunner {
           workspace: this.options.workspace,
           tasks,
           now: new Date(),
+          mode: this.currentMode,
         });
       if (dynamicState) {
            llmMessages.push(dynamicState);
          }
 
-        // Pre-send check: count the full prompt tokens and trigger compaction
-        // if the total exceeds the user's threshold. This catches cases where
-        // the last assistant message is small but the accumulated history +
-        // tool definitions push the prompt over context.
+        // In COMPOSE mode the LLM produces a final-answer text directly; no
+        // tool surface is exposed so it can't tool-call its way out of the
+        // mode. In RESEARCH mode we expose the full tool list (including
+        // `transition_to_compose_mode`, which the runner intercepts below).
+        const toolDefs =
+          this.currentMode === 'research' ? getSshAgentToolDefinitions() : [];
+
+        // Pre-send check: estimate the full prompt size (messages + tool
+        // definitions) and trigger compaction if it crosses the threshold.
+        // Tool defs go on the wire alongside the messages but aren't counted
+        // by `countChatTokens`, so an estimate-by-JSON-size keeps the
+        // threshold honest. Without this the compact threshold silently
+        // ignores 25-40k of tool-schema tokens and the real request can
+        // exceed the model's context window even when the message count
+        // looks fine.
         const thresholdTokens = usable({ cfg, model: modelLimits });
         console.log(`[sshAgent] Counting tokens for ${llmMessages.length} messages`);
-        const estimatedPromptTokens = await this.llama.countChatTokens(llmMessages);
-        console.log(`[sshAgent] Estimated prompt tokens: ${estimatedPromptTokens}, threshold: ${thresholdTokens}`);
-        if (estimatedPromptTokens >= thresholdTokens) {
+        const messageTokens = await this.llama.countChatTokens(llmMessages);
+        const toolDefTokens = estimateToolDefTokens(toolDefs);
+        const estimatedPromptTokens = messageTokens + toolDefTokens;
+        console.log(
+          `[sshAgent] Estimated prompt tokens: ${estimatedPromptTokens} ` +
+          `(messages=${messageTokens}, tools=${toolDefTokens}), threshold: ${thresholdTokens}`
+        );
+        if (!this.compactionExhausted && estimatedPromptTokens >= thresholdTokens) {
           console.log(`[sshAgent] prompt tokens ${estimatedPromptTokens} >= threshold ${thresholdTokens}, triggering compaction`);
           this.compactionPending = true;
-          await compactionRunner.run(refreshed, compactionContext);
+          const result = await compactionRunner.run(refreshed, compactionContext);
           this.compactionPending = false;
           await this.emitProjection();
+          if (!result.compacted) {
+            this.markCompactionExhausted('pre-send');
+          }
           continue;
         }
-
-        const toolDefs = getSshAgentToolDefinitions();
 
         // Open an in-progress assistant message before streaming so the UI
         // sees real-time tokens flowing into a stable record.
@@ -318,7 +361,7 @@ export class SshAgentRunner {
         }
 
         if (streamResult.toolCall) {
-          this.consecutiveNoToolRetries = 0;
+          this.consecutiveResearchTextRetries = 0;
           const toolName = streamResult.toolCall.name;
           let parsedArgs: Record<string, any> = {};
           try {
@@ -327,6 +370,72 @@ export class SshAgentRunner {
               : {};
           } catch {
             parsedArgs = {};
+          }
+
+          // Track consecutive same-tool runs. Hitting the limit queues a
+          // one-shot steering reminder for the next iteration; the streak
+          // resets when the tool name changes so the reminder won't fire
+          // again for the same offender.
+          if (this.lastToolName === toolName) {
+            this.sameToolStreak++;
+          } else {
+            this.lastToolName = toolName;
+            this.sameToolStreak = 1;
+            this.sameToolReminderSent = false;
+          }
+          if (
+            this.sameToolStreak >= this.SAME_TOOL_STREAK_LIMIT &&
+            !this.sameToolReminderSent &&
+            toolName !== 'transition_to_compose_mode'
+          ) {
+            this.sameToolReminderSent = true;
+            this.pendingUserMessages.push(
+              `<system-reminder>\nYou have called \`${toolName}\` ${this.sameToolStreak} times in a row. ` +
+              'If this tool is no longer making progress, switch to a different tool — try `read`, `grep`, `glob`, `shell`, or actual file edits via `write`/`edit`. ' +
+              'If every Success Criterion is met and Required Verification has passed, call `transition_to_compose_mode` to finish the task.\n</system-reminder>'
+            );
+          }
+
+          // The mode-transition tool is special: it doesn't run an executor,
+          // it just flips the runner's mode so the next iteration produces
+          // the final answer in COMPOSE. We still persist a ToolPart so the
+          // trace shows the transition and the LLM sees the matching tool
+          // result on the next turn.
+          if (toolName === 'transition_to_compose_mode') {
+            const callId = `tc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const transitionPart: ToolPart = {
+              id: PartID.ascending(),
+              sessionID: this.options.sessionId,
+              messageID: assistantId,
+              type: 'tool',
+              callID: callId,
+              tool: toolName,
+              state: {
+                status: 'completed',
+                input: parsedArgs,
+                output:
+                  'Mode transition acknowledged. The next turn is COMPOSE mode — write the final answer as plain assistant text without calling tools.',
+                title: toolName,
+                metadata: {},
+                time: { start: Date.now(), end: Date.now() },
+              },
+            };
+            await this.sessions.upsertPart(transitionPart);
+            await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
+            this.currentMode = 'compose';
+            await this.emitProjection();
+            continue;
+          }
+
+          // In COMPOSE the tool surface is empty, so any tool call here is a
+          // protocol violation by the model. Reject it and re-prompt.
+          if (this.currentMode === 'compose') {
+            await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
+            this.pendingUserMessages.push(
+              `You called \`${toolName}\` while in COMPOSE mode, where tool calls are not allowed. Reply with the final answer to the user as plain assistant text instead.`
+            );
+            await this.emitProjection();
+            continue;
           }
 
           // Persist the ToolPart as `pending` so the UI sees the call before
@@ -458,29 +567,46 @@ export class SshAgentRunner {
           continue;
         }
 
-        // No tool call. Could mean:
-        //   (a) the model genuinely finished — that's the final answer.
-        //   (b) the model narrated an intended action ("Let me fix the HTML…")
-        //       without actually committing to a tool call. Common with thinking
-        //       models that leak reasoning into the content channel.
-        // For (b) we re-prompt up to MAX_NO_TOOL_RETRIES times before falling
-        // through to (a). The synthetic reminder is queued via the same path
-        // user steering messages use, so the next iteration sees it as history.
-        if (streamedText.trim() && this.consecutiveNoToolRetries < this.MAX_NO_TOOL_RETRIES) {
-          this.consecutiveNoToolRetries++;
-          await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
-          this.pendingUserMessages.push(
-            'Your previous turn described an action but did not emit a tool call. ' +
-            'If you intended to act (e.g. edit a file, run a command, reload the browser), emit the corresponding tool call now. ' +
-            'If you are finished and there is nothing more to do, reply with your final answer text only — without describing additional actions.'
+        // No tool call.
+        //
+        // COMPOSE: this is the final answer. Any text the model produced has
+        // already been persisted as a TextPart above; computeFinalAnswerFromDb
+        // pulls it out via findFinalAnswer and we hand it to onComplete.
+        //
+        // RESEARCH: emitting plain text without a tool call is a protocol
+        // violation under the mode contract. Re-prompt with a stricter
+        // reminder. After MAX_RESEARCH_TEXT_RETRIES we force-transition to
+        // COMPOSE so the user gets *some* answer (the model's text plus
+        // whatever it can synthesize next turn) instead of a stuck loop.
+        if (this.currentMode === 'research') {
+          if (this.consecutiveResearchTextRetries < this.MAX_RESEARCH_TEXT_RETRIES) {
+            this.consecutiveResearchTextRetries++;
+            await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
+            this.pendingUserMessages.push(
+              `<system-reminder>\nYou are in RESEARCH mode. Plain assistant text is not allowed in this mode. ` +
+              `If work remains, emit the next tool call (read/edit/write/shell/grep/glob/browser/todo/question/task). ` +
+              `If every Success Criterion is met and Required Verification has passed, call \`transition_to_compose_mode\` and then write the final answer in COMPOSE mode on the next turn.\n</system-reminder>`
+            );
+            await this.emitProjection();
+            continue;
+          }
+          // Safety valve: model can't be coaxed back into protocol. Force
+          // the transition so the next iteration produces a final answer.
+          console.warn(
+            `[sshAgent] Forcing transition to COMPOSE after ${this.MAX_RESEARCH_TEXT_RETRIES} ` +
+            'research-mode text-only turns; the model would not emit tool calls.'
           );
+          await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
+          this.currentMode = 'compose';
+          this.consecutiveResearchTextRetries = 0;
           await this.emitProjection();
           continue;
         }
 
-        // Final answer path. Pass the aggregated narration (every assistant
-        // TextPart, in order) to onComplete so the chat bubble keeps the full
-        // transcript instead of being overwritten with just the last iteration.
+        // Final answer path (COMPOSE mode). Pass the aggregated narration
+        // (every assistant TextPart, in order) to onComplete so the chat
+        // bubble keeps the full transcript instead of being overwritten with
+        // just the last iteration.
         await this.finalizeAssistant(assistantId, inputTokens, outputTokens, 'stop');
         await this.emitProjection();
         const aggregate = await this.computeFinalAnswerFromDb();
@@ -491,6 +617,8 @@ export class SshAgentRunner {
       if (this.cancelled) {
         this.callbacks.onComplete?.(null);
       }
+      // No other exit: the loop only ends via `return` from the compose
+      // no-tool-call path (which already fires onComplete) or via cancel.
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.callbacks.onError?.(message);
@@ -531,6 +659,23 @@ export class SshAgentRunner {
     }
     // Should never happen: the loop is started with the agent prompt as a user message.
     return MessageID.ascending();
+  }
+
+  private markCompactionExhausted(trigger: string): void {
+    if (this.compactionExhausted) return;
+    this.compactionExhausted = true;
+    console.warn(
+      `[sshAgent] Compaction did not reduce context (trigger=${trigger}). ` +
+      'Disabling further compaction attempts and forcing COMPOSE wrap-up so the run terminates.'
+    );
+    if (this.currentMode === 'research') {
+      this.currentMode = 'compose';
+      this.pendingUserMessages.push(
+        '<system-reminder>\nThe conversation context cannot be compacted further. ' +
+        'Stop attempting tool calls. Compose a final answer that summarizes what was accomplished, ' +
+        'what remains, any errors encountered, and what the user should do next.\n</system-reminder>'
+      );
+    }
   }
 
   private async finalizeAssistant(
@@ -580,4 +725,14 @@ export class SshAgentRunner {
 function clamp(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+// Approximate the tokens consumed by a tool-definitions array on the wire.
+// llama.cpp serializes the schemas into the function-calling system prompt;
+// `countChatTokens` only sees `messages`, so without this estimate the
+// threshold check undercounts by tens of thousands of tokens for the SSH
+// agent's full surface. ~4 chars per token is conservative for JSON.
+function estimateToolDefTokens(toolDefs: ReadonlyArray<unknown>): number {
+  if (!toolDefs.length) return 0;
+  return Math.ceil(JSON.stringify(toolDefs).length / 4);
 }

@@ -88,6 +88,16 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
         // showing both the JSON args ("todo (9 items)") and the formatted
         // observation alongside the panel.
         if (part.tool === 'todo') continue;
+        // The mode transition is a runner-level event, not a tool call the
+        // user cares about as action+observation. Render it as a single
+        // mode_transition step so the trace shows the boundary cleanly.
+        if (part.tool === 'transition_to_compose_mode') {
+          steps.push({
+            type: 'mode_transition',
+            content: 'Switched to COMPOSE mode — composing the final answer.',
+          });
+          continue;
+        }
         const args = part.state.input || {};
         steps.push({
           type: 'action',

@@ -4,7 +4,7 @@
 // implementation grew large enough to deserve its own file.
 
 export {
-  SSH_AGENT_TOOLS as SSH_AGENT_TOOL_NAMES,
+  PUBLISHED_SSH_AGENT_TOOLS as SSH_AGENT_TOOL_NAMES,
   getSshAgentTool,
   getSshAgentToolDefinitions,
   getSshAgentToolPolicy,
