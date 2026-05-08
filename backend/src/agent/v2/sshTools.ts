@@ -241,14 +241,14 @@ function capResult(name: string, raw: string, isError: boolean): SshAgentToolRes
 const shellTool: SshAgentTool = {
   name: 'shell',
   description:
-    'Execute a shell command on the remote workspace host. Supports git, npm, docker, and any terminal operation. Output is streamed and capped at 2,000 lines or 50KB. Use working_dir to run relative to a subdirectory.',
+    'Execute a shell command on the remote workspace host (git, npm, docker, build/test/run, etc.). Each call is a FRESH shell — there is NO persistent cwd, exported variables, or shell state between calls. Use the `working_dir` parameter (or chain `cd … && …` inline) to run somewhere other than the workspace root. Both stdout and stderr are captured and returned automatically, so do NOT add `2>&1` or pipe to `tail`/`head` — the runner already truncates output (2,000 lines / 50KB) and persists overflow to a file you can re-read. Default timeout is 120s; bump `timeout_ms` for installs/builds (npm install, docker build, large test suites). For pure file/dir operations, prefer the dedicated tools: `read` (file or dir listing), `glob` (find files by pattern), `grep` (search file contents), `edit`/`write` (modify files) — they return structured, capped output and are faster than shelling out to `cat`/`ls`/`find`/`grep`.',
   parameters: {
     type: 'object',
     properties: {
-      command: { type: 'string', description: 'The shell command to execute.' },
-      working_dir: { type: 'string', description: 'Optional path relative to the workspace root.' },
-      timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds. Defaults to 120000.' },
-      description: { type: 'string', description: 'Short human description of what this command does.' },
+      command: { type: 'string', description: 'The shell command to execute. Stderr is already captured — do not append `2>&1`.' },
+      working_dir: { type: 'string', description: 'Optional path relative to the workspace root. Equivalent to running `cd <working_dir> && <command>` for this single call only.' },
+      timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds. Defaults to 120000 (2 min). Increase for installs/builds that may take longer.' },
+      description: { type: 'string', description: 'Short human description of what this command does (shown in the trace).' },
     },
     required: ['command'],
   },
@@ -285,12 +285,12 @@ const shellTool: SshAgentTool = {
 const readTool: SshAgentTool = {
   name: 'read',
   description:
-    'Read a file or directory. Defaults to 2,000 lines from the start. Supports `offset` (1-indexed) and `limit`. Reads images and PDFs as file attachments. Detects and rejects binary files. Lines longer than 2,000 characters are truncated.',
+    'Read a file (text source, JSON, etc.) or list a directory. Defaults to 2,000 lines from the start; supports `offset` (1-indexed) and `limit`. Output is line-numbered. Lines longer than 2,000 chars are truncated mid-line. Images and PDFs are returned as file attachments (you will see the rendered image). Binary files are rejected — use `shell` with `file`/`hexdump` if you really need the bytes. THIS is how you read source files — never fetch them through `browser evaluate`.',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path relative to the workspace root.' },
-      offset: { type: 'number', description: '1-indexed starting line. Defaults to 1.' },
+      path: { type: 'string', description: 'Path to a file OR a directory, relative to the workspace root (or absolute).' },
+      offset: { type: 'number', description: '1-indexed starting line. Defaults to 1. Use to page through large files.' },
       limit: { type: 'number', description: 'Maximum lines to read. Defaults to 2000.' },
     },
     required: ['path'],
@@ -337,12 +337,12 @@ const readTool: SshAgentTool = {
 const writeTool: SshAgentTool = {
   name: 'write',
   description:
-    'Write a file to disk on the remote workspace. Overwrites existing files. Requires the file to have been read first in this run; prefer `edit` for changes to existing files.',
+    'Create a new file or completely replace an existing file with `content`. For brand-new files (does not exist yet) just call write directly. For EXISTING files you must first call `read` on the same path in this run — write will refuse otherwise. For surgical changes to an existing file, prefer `edit` (sends only the diff) over re-sending the entire file. Re-writing the same path with byte-identical content is a silent no-op (anti-loop guard) — do not retry; move on.',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path relative to the workspace root.' },
-      content: { type: 'string', description: 'Complete file content to write.' },
+      path: { type: 'string', description: 'Path relative to the workspace root (or absolute).' },
+      content: { type: 'string', description: 'Complete file content to write. The whole file is replaced.' },
     },
     required: ['path', 'content'],
   },
@@ -402,14 +402,14 @@ const writeTool: SshAgentTool = {
 const editTool: SshAgentTool = {
   name: 'edit',
   description:
-    'Perform an exact string replacement in a file. Requires the file to have been read first. Fails if `oldString` is not present, or matches more than once unless `replaceAll` is true.',
+    'PREFERRED tool for changing an existing file: an exact-string find-and-replace. Requires the file to have been read first in this run. `oldString` must appear verbatim and exactly once unless `replaceAll: true` (then it must appear at least once). Include enough surrounding context in `oldString` to make the match unique — do not pass a single line that occurs many times. Preserve indentation/whitespace exactly. For multi-occurrence find-and-replace (rename a variable etc.), use `replaceAll: true`. Reach for `write` only when re-creating the file from scratch.',
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Path relative to the workspace root.' },
-      oldString: { type: 'string', description: 'Exact text to replace.' },
-      newString: { type: 'string', description: 'Replacement text.' },
-      replaceAll: { type: 'boolean', description: 'Replace all occurrences. Defaults to false.' },
+      path: { type: 'string', description: 'Path relative to the workspace root (or absolute). REQUIRED.' },
+      oldString: { type: 'string', description: 'Exact text to find. Must include enough context to be unique unless `replaceAll` is true.' },
+      newString: { type: 'string', description: 'Replacement text. Must differ from `oldString`.' },
+      replaceAll: { type: 'boolean', description: 'Replace every occurrence instead of requiring exactly one match. Defaults to false.' },
     },
     required: ['path', 'oldString', 'newString'],
   },
@@ -448,11 +448,11 @@ const editTool: SshAgentTool = {
 const globTool: SshAgentTool = {
   name: 'glob',
   description:
-    'Find files in the workspace by glob pattern (e.g. "**/*.ts", "src/**/*.tsx"). Returns matching paths sorted by modification time.',
+    'Find files by glob pattern. The pattern is matched RELATIVE to the workspace root (do NOT pass an absolute path like `/home/user/project/...` — use `src/**/*.ts`, `**/*.tsx`, `**/Dockerfile*`, etc.). Supports `**` for recursive matches and `{a,b,c}` brace expansion. Returns up to 200 paths sorted by modification time (newest first). Excludes nothing automatically — combine with a more specific pattern if you want to skip `node_modules`/`dist`/etc.',
   parameters: {
     type: 'object',
     properties: {
-      pattern: { type: 'string', description: 'Glob pattern relative to the workspace root.' },
+      pattern: { type: 'string', description: 'Glob pattern RELATIVE to the workspace root. Examples: `src/**/*.tsx`, `**/*.{js,ts}`, `backend/**/Dockerfile*`.' },
     },
     required: ['pattern'],
   },
@@ -479,12 +479,12 @@ const globTool: SshAgentTool = {
 const grepTool: SshAgentTool = {
   name: 'grep',
   description:
-    'Fast content search using regular expressions. Searches file contents, supports full regex syntax, and filters by file pattern. Returns file paths and line numbers sorted by modification time.',
+    'Fast content search across the workspace using regex (ripgrep when available, else `grep -RInE`). Returns up to 200 `path:line: text` matches, sorted by modification time. Use `include` to narrow by file glob (e.g. `*.ts`, `src/**/*.tsx`). Always preferred over `shell` + `grep`/`rg` — output is structured and capped. Use this to locate symbols, callers, error messages, or config keys before reading files.',
   parameters: {
     type: 'object',
     properties: {
-      pattern: { type: 'string', description: 'Regular expression to search for.' },
-      include: { type: 'string', description: 'Optional file glob to include (e.g. "*.ts").' },
+      pattern: { type: 'string', description: 'Regular expression to search for (extended/PCRE-ish). Anchor with `\\b` for word boundaries.' },
+      include: { type: 'string', description: 'Optional file glob filter. Examples: `*.ts`, `*.{js,jsx}`, `backend/**/*.py`.' },
     },
     required: ['pattern'],
   },
@@ -511,7 +511,7 @@ const grepTool: SshAgentTool = {
 const todoTool: SshAgentTool = {
   name: 'todo',
   description:
-    'Replace the entire structured todo list for this session. Pass the complete desired list. Each item has content, status (pending|in_progress|completed|cancelled), and priority (high|medium|low). The agent only sees its own todos through the tool output re-sent in the message history.',
+    'Your structured plan for this run. Each call REPLACES the entire list — always send the full intended list, not a delta. Use it to (a) lay out the plan up front for multi-step tasks and (b) flip an item to `in_progress` before starting it and `completed` immediately after. Skip the tool entirely for trivial single-step requests. Do NOT re-submit a byte-identical list on every turn — only call when the plan or a status actually changes.',
   parameters: {
     type: 'object',
     properties: {
@@ -593,7 +593,7 @@ function todoListMatches(existing: AgentRunTask[], desired: TodoListItem[]): boo
 const questionTool: SshAgentTool = {
   name: 'question',
   description:
-    'Ask the user a question and wait for their answer. Use this to gather preferences, clarify ambiguity, or get a decision. Provide options for clickable answers; the user may also reply free-form (in which case the question is treated as ignored).',
+    'BLOCKING: pauses the agent and waits for the human. Use only when you genuinely cannot proceed — e.g. an irreversible decision, a credential the user must paste, or a fork in the requirements that has no defensible default. Do NOT use it for: status updates ("what did we do so far"), tool-choice decisions you should make yourself ("should I install puppeteer?", "should I use docker-compose v1 or v2?"), permission for routine actions, or anything you can resolve by reading code/docs. Make a sensible default choice and keep going; only ask when stopping is genuinely cheaper than guessing wrong. Provide concrete `options` whenever possible so the user clicks instead of typing.',
   parameters: {
     type: 'object',
     properties: {
@@ -648,7 +648,7 @@ const questionTool: SshAgentTool = {
 const taskTool: SshAgentTool = {
   name: 'task',
   description:
-    'Launch a subagent to handle a complex multistep task autonomously. Specify a `subagent_type` and a detailed `prompt`. Returns a task_id; pass the same id back to resume an existing subagent.',
+    'Launch a subagent to handle a complex multistep task autonomously. Each subagent starts with a cold context, so the `prompt` must be SELF-CONTAINED — include the goal, every relevant file path, what has already been tried, and the exact form of the result you want back. `subagent_type`: `explore` (read-only research/search), `build` (implementation), `plan` (design without writing code). Returns a `task_id` — pass it back later to resume an existing subagent rather than spawning a fresh one.',
   parameters: {
     type: 'object',
     properties: {
@@ -692,14 +692,14 @@ const taskTool: SshAgentTool = {
 const BROWSER_DIRECT_ACTIONS = [
   'visit', 'click', 'type', 'scroll', 'select',
   'press', 'hover', 'focus', 'clear', 'evaluate',
-  'back', 'forward', 'reload', 'wait_for',
+  'back', 'forward', 'reload', 'wait_for', 'screenshot',
   'batch',
 ] as const;
 
 const browserTool: SshAgentTool = {
   name: 'browser',
   description:
-    'Drive a headless Chromium page. PREFER action="batch" with a steps[] array whenever you have more than one step in mind (visit → type → click → wait_for). One call, one round-trip, one animated screenshot sequence. Only fall back to a single-step call when the next step genuinely depends on what you observe in the current screenshot/text. Example: action="batch", steps=[{"action":"visit","url":"http://host:3000"},{"action":"type","selector":"#q","text":"hello","submit":true},{"action":"wait_for","selector":".results"}]. Single-step actions: visit | click | type (submit:true presses Enter) | clear | press (any key) | hover | focus | scroll | select (<select> by value) | wait_for (selector visible/hidden) | evaluate (async JS, returns serialized value) | back | forward | reload. Every call returns page URL/title, rendered text, screenshot(s), captured network, and console logs.',
+    'Drive a headless Chromium page. **EVERY call already returns**: current page URL, title, rendered body text, a fresh PNG screenshot, recent network entries, and console logs. So: do NOT use `evaluate` to read `window.location` / `document.title` / `document.body.innerText` — that data is already in the response. Do NOT use `evaluate` to draw a canvas screenshot — every action returns one. Do NOT use `evaluate(fetch(...))` to read source files from the dev server — use the `read` tool on the actual file path on the SSH host instead. PREFER action="batch" with a steps[] array whenever you have more than one step in mind (visit → type → click → wait_for): one call, one round-trip, one animated screenshot sequence. Only fall back to a single-step call when the next step genuinely depends on what you observe. Example: action="batch", steps=[{"action":"visit","url":"http://host:3000"},{"action":"type","selector":"#q","text":"hello","submit":true},{"action":"wait_for","selector":".results"}]. Single-step actions: visit | click | type (submit:true presses Enter) | clear | press (any key) | hover | focus | scroll | select (<select> by value) | wait_for (selector visible/hidden) | screenshot (just refresh the current frame, no navigation) | evaluate (async JS for things the other actions cannot do — computed styles, localStorage, dispatching custom events; returns the serialized return value) | back | forward | reload.',
   parameters: {
     type: 'object',
     properties: {
@@ -766,6 +766,10 @@ const browserTool: SshAgentTool = {
       const url = String(args.url || '').trim();
       if (!url) return capResult('browser', 'Error: url is required for visit', true);
       result = await client.sessionVisit(sessionKey, url, { bypassCache: Boolean(args.bypass_cache) });
+    } else if (action === 'screenshot') {
+      // No-op action: just refresh the page state and capture a screenshot.
+      // sessionActions with an empty list still goes through finalizeAction.
+      result = await client.sessionActions(sessionKey, []);
     } else {
       const sub = buildSubActionFromArgs(action, args);
       if ('error' in sub) return capResult('browser', `Error: ${sub.error}`, true);

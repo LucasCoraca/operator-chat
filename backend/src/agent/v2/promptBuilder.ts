@@ -278,7 +278,7 @@ function workspaceBlock(workspace?: WorkspaceConfig): string {
     `- Concrete batch example for "open the app, search, and check the results": \`browser action="batch" steps=[{"action":"visit","url":"${hostUrl}:3000"},{"action":"type","selector":"#q","text":"hello","submit":true},{"action":"wait_for","selector":".results"}]\`. One round-trip, one animated screenshot sequence. Don't fan this out into three separate \`browser\` calls.`,
     '- For `<select>` dropdown menus, use `browser select` (or sub-action `select` inside a batch) with the `<select>` selector and the `value` to pick — do NOT click the dropdown and then click an option (headless Puppeteer cannot render native dropdowns).',
     '- Single-step actions (when batching is not appropriate): visit, click, type (submit:true), clear, press (Enter/Tab/Escape/ArrowDown/etc), hover, focus, scroll, select, wait_for (visible/hidden), evaluate (async JS, returns serialized value), back, forward, reload.',
-    '- Reach for `browser evaluate` when no built-in action covers what you need (read computed styles, inspect localStorage, dispatch a custom event, etc.). Use `browser wait_for` instead of fixed `wait` sleeps when waiting for content to appear.',
+    '- `browser evaluate` is for things the other actions cannot do (read computed styles, inspect localStorage, dispatch a custom event, etc.). Do NOT use it to read URL/title/body text/network — those are already in every response. Do NOT use it to take a screenshot — every action already returns one (or call action="screenshot" for a fresh frame). Do NOT use it to fetch source files — use the `read` tool on the actual file path. Use `browser wait_for` instead of fixed `wait` sleeps when waiting for content to appear.',
     '- After editing a file the page already loaded, a plain `browser reload` may still execute the cached JS. Pass `bypass_cache: true` (works on `visit` and `reload`) to do a hard refresh that re-fetches JS/CSS/HTML from disk. Default leaves the cache on, since that matches normal browser behavior and is faster.',
     '- If the browser visit returns a screenshot or console errors, treat that as the source of truth. Fix any console/network errors you see before reporting success.',
   ].join('\n');
@@ -294,7 +294,7 @@ function taskBlock(tasks: AgentRunTask[]): string {
   });
   return [
     '## TASK LIST (live)',
-    'This checklist is persisted in the database and visible to the user. Mark items in_progress with task_update before starting them; mark them completed when finished.',
+    'This checklist is persisted in the database and visible to the user. Use the `todo` tool to update it: mark items `in_progress` before starting them and `completed` when finished. Each `todo` call replaces the entire list — always send the full intended list.',
     lines.join('\n'),
   ].join('\n');
 }
@@ -324,13 +324,17 @@ export function buildStaticSystemPrompt(input: SshAgentPromptInput): string {
 
   sections.push([
     '# Task management',
-    'For non-trivial multi-step work, use task_create / task_update / task_list. Mark each task in_progress before starting and completed when done. Do not abandon in_progress tasks; pick them back up after detours.',
+    'For non-trivial multi-step work, lay the plan out with the `todo` tool: send the full intended list, mark items `in_progress` before starting and `completed` when done. Do not abandon `in_progress` items; pick them back up after detours. Skip the tool entirely for trivial single-step requests, and do NOT re-submit a byte-identical list — only call when the plan or a status actually changes.',
   ].join('\n'));
 
   sections.push([
     '# Tool usage policy',
-    '- Prefer read/edit/write/apply_patch for file work. Reach for bash only when you actually need shell semantics (builds, tests, git, package managers).',
-    '- After modifying files, verify with a bounded check (build, lint, or a focused test) before declaring success.',
+    '- File work: `read` (file or directory listing), `glob` (find by pattern), `grep` (regex content search), `edit` (preferred for changes — exact-string find/replace), `write` (new file or full rewrite). Prefer these over shelling out to `cat`/`ls`/`find`/`grep`/`sed`.',
+    '- Reach for `shell` only when you actually need shell semantics: builds, tests, git, package managers, running servers. Each shell call is a fresh shell — no persistent cwd or env between calls; use `working_dir` or `cd && …`.',
+    '- `edit` requires the file to have been read first in this run. `write` requires the same for existing files (new files are exempt). Identical re-writes are silent no-ops — do not loop.',
+    '- After modifying files, verify with a bounded check (build, lint, focused test, or `browser` visit for UI) before declaring success.',
+    '- The `browser` tool already returns URL/title/body-text/screenshot/network/console on every call — do not use `evaluate` to re-fetch that information or to read source files (use `read` for that). Default to `action: "batch"` for any sequence of 2+ steps.',
+    '- `question` BLOCKS on the user — only use it when stopping is genuinely cheaper than picking a defensible default. Do not use it for status updates or routine permission asks.',
     '- The backend persists tool overflow files and browser screenshots under `data/agent-attachments` (or the path in `OPERATOR_ATTACHMENTS_DIR`); use that directory for any auxiliary scratch files referenced from tool output.',
   ].join('\n'));
 
