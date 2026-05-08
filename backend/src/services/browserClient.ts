@@ -107,13 +107,29 @@ export class BrowserClient {
   async initialize(): Promise<void> {
     if (this.browser) return;
 
+    // WebGL in headless Chrome: we deliberately do NOT pass --disable-gpu.
+    // Instead we route GL through ANGLE's SwiftShader backend, which is a
+    // pure-software rasterizer bundled with Puppeteer's Chromium build (the
+    // production Dockerfile uses node:20-bookworm-slim + Puppeteer's own
+    // Chromium so SwiftShader is present). That gives WebGL contexts on a
+    // host with no GPU at the cost of ~CPU rendering.
+    //
+    // --ignore-gpu-blocklist is needed because Chromium otherwise blocks
+    // WebGL on "unrecognized" GPUs (i.e. inside a container).
+    // --enable-unsafe-swiftshader silences the deprecation warning that
+    // Chromium prints when GL is forced to swiftshader; without it newer
+    // builds will refuse and fall back to "no WebGL".
     this.browser = await puppeteer.launch({
       headless: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu',
+        '--use-gl=angle',
+        '--use-angle=swiftshader',
+        '--enable-unsafe-swiftshader',
+        '--ignore-gpu-blocklist',
+        '--enable-webgl',
       ],
     });
   }

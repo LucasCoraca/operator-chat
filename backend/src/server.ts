@@ -714,6 +714,24 @@ function normalizePersistedAgentRun(run: AgentRun): AgentRun {
   };
 }
 
+// After a server restart there can never be an in-flight ReAct agent — the
+// process that owned the loop is gone. Persisted state with `isComplete: false`
+// would otherwise make the join-chat handler emit an `agent-state` event that
+// pushes the UI into a stuck "still running" mode where stop/edit/retry all
+// no-op. Force-flip incomplete states to complete on load so the persisted
+// view matches reality.
+function normalizePersistedAgentState(
+  agentState: ChatSession['agentState']
+): ChatSession['agentState'] {
+  if (!agentState) return agentState;
+  if (agentState.isComplete) return agentState;
+  return {
+    ...agentState,
+    isComplete: true,
+    partialFinalAnswer: undefined,
+  };
+}
+
 function latestIsoDate(values: Array<Date | string | undefined | null>): string | undefined {
   let latestTime = Number.NEGATIVE_INFINITY;
   let latestValue: string | undefined;
@@ -813,7 +831,11 @@ async function loadChats(): Promise<void> {
       const result = await chatRepository.getWithMessages(chat.id);
       if (result) {
         const { chat: persistedChat, messages } = result;
-        const persistedAgentState = sanitizeAgentStateForPersistence(persistedChat.agent_state);
+        const sanitizedAgentState = sanitizeAgentStateForPersistence(persistedChat.agent_state);
+        const persistedAgentState = normalizePersistedAgentState(sanitizedAgentState);
+        const agentStateNormalized =
+          sanitizedAgentState !== undefined &&
+          persistedAgentState !== sanitizedAgentState;
         const parsedPersistedAgentState = parseJsonIfNeeded(persistedChat.agent_state) as any;
         const persistedAgentRuns = sanitizeAgentRunsForPersistence(parsedPersistedAgentState?.agentRuns)
           .map(normalizePersistedAgentRun);
@@ -873,7 +895,7 @@ async function loadChats(): Promise<void> {
         };
         const sessionChanged = normalizeChatSession(session);
         chatSessions.set(persistedChat.id, session);
-        if (sessionChanged || restoredMessagesChanged) {
+        if (sessionChanged || restoredMessagesChanged || agentStateNormalized) {
           await saveChat(session, { touchUpdatedAt: false });
         }
       }
@@ -3028,11 +3050,14 @@ io.on('connection', (socket) => {
     socket.join(chatId);
     console.log(`Socket ${socket.id} joined chat ${chatId}`);
 
-    // Check if there's an active agent or incomplete agent state
+    // Only emit live agent-state when there's actually a live agent in this
+    // process. Persisted `isComplete: false` alone is NOT a signal — after a
+    // server restart the runner is gone but the flag may still be stale.
+    // Emitting here in that case made the UI think the agent was still
+    // running and froze stop/edit/retry.
     const hasActiveAgent = session.currentAgent !== undefined;
-    const hasIncompleteState = session.agentState && !session.agentState.isComplete && (session.agentState.steps?.length ?? 0) > 0;
-    
-    if (hasActiveAgent || hasIncompleteState) {
+
+    if (hasActiveAgent) {
       const stateToEmit = {
         steps: session.agentState?.steps || [],
         isComplete: session.agentState?.isComplete || false,

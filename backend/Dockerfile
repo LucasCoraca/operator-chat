@@ -3,6 +3,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
+# The builder doesn't need a runnable Chrome — it only compiles TypeScript —
+# so skip Puppeteer's postinstall download here. The production image fetches
+# its own browser binary below.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # Copy package files
 COPY package*.json ./
 
@@ -15,35 +20,64 @@ COPY . .
 # Build the application
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine
+# Production stage — Debian-based so Puppeteer's bundled Chromium build
+# (which ships SwiftShader for software-rendered WebGL) works out of the box.
+# Alpine's `chromium` package is stripped of SwiftShader, so WebGL fails to
+# initialize there even with the right flags.
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Install dumb-init for proper signal handling and Chrome dependencies
-RUN apk add --no-cache \
+# Runtime libraries Chromium links against. We deliberately do NOT install
+# the distro `chromium` package — Puppeteer downloads its own matching build
+# into PUPPETEER_CACHE_DIR during `npm ci` below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     dumb-init \
-    chromium \
-    nss \
-    freetype \
-    freetype-dev \
-    harfbuzz \
     ca-certificates \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libexpat1 \
+    libfontconfig1 \
+    libgbm1 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
     openssh-client \
-    ttf-freefont
+    wget \
+    xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
+# Create non-root user. Use `useradd -m` so /home/nodejs exists for any
+# tooling that defaults to $HOME.
+RUN groupadd -g 1001 nodejs && useradd -m -u 1001 -g nodejs -s /bin/bash nodejs
 
-# Set Puppeteer to use installed Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+# Pin Puppeteer's browser cache to a known path the runtime user can read.
+# Setting this BEFORE `npm ci` makes the postinstall download land here
+# instead of /root/.cache/puppeteer.
+ENV PUPPETEER_CACHE_DIR=/app/.cache/puppeteer
 
 # Copy package files
 COPY package*.json ./
 
-# Install production dependencies only
+# Install production dependencies only. Puppeteer's postinstall fetches the
+# bundled Chromium into PUPPETEER_CACHE_DIR.
 RUN npm ci --only=production && npm cache clean --force
 
 # Copy built application from builder stage
@@ -52,7 +86,8 @@ COPY --from=builder /app/dist ./dist
 # Copy personalities.json file for built-in personalities
 COPY --from=builder /app/personalities.json ./personalities.json
 
-# Create directories for data persistence
+# Create directories for data persistence and hand the whole tree (including
+# the puppeteer browser cache populated by `npm ci`) to the runtime user.
 RUN mkdir -p /app/data /app/sandboxes && chown -R nodejs:nodejs /app
 
 # Switch to non-root user
