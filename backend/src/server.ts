@@ -25,6 +25,7 @@ import { TMP_ROOT as ATTACHMENTS_ROOT } from './agent/v2/outputCap';
 import { MessageID, PartID, SessionID } from './agent/v2/ids';
 import type { UserMessage as V2UserMessage, TextPart as V2TextPart, ToolPart as V2ToolPart } from './agent/v2/message';
 import { isToolPart as isV2ToolPart } from './agent/v2/message';
+import { projectPartsToSteps, findFinalAnswer } from './agent/v2/partProjection';
 import type { AgentSession } from './repositories/agentSessionRepository';
 
 // JWT secret for socket.io
@@ -2074,6 +2075,140 @@ async function resumeAgentRun(
   return { ok: true };
 }
 
+// Rewind a v2 SSH agent run back to the state immediately before a specific
+// trace step, then respawn the runner so the loop replays from that point.
+// `messageId` is the v2 `agent_session_messages` id that produced the step
+// the user clicked (carried in AgentStep.sourceMessageID). The target message
+// + every later message + their parts are deleted; the run's finalAnswer is
+// cleared and status is flipped back to 'running' before the new runner spins
+// up. Workspace files are NOT reverted — the model will see the workspace as
+// it currently is, which the UI surfaces as a warning before confirmation.
+async function rollbackAgentRun(
+  runId: string,
+  userId: string,
+  sourceSocketChatId: string,
+  messageId: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (runningAgentRuns.has(runId)) {
+    return { ok: false, reason: 'Stop the run before rewinding it.' };
+  }
+
+  let foundSession: ChatSession | undefined;
+  let foundRun: AgentRun | undefined;
+  for (const session of chatSessions.values()) {
+    if (session.userId !== userId) continue;
+    const run = session.agentRuns.find((r) => r.id === runId);
+    if (run) {
+      foundSession = session;
+      foundRun = run;
+      break;
+    }
+  }
+  if (!foundSession || !foundRun) {
+    return { ok: false, reason: 'Run not found.' };
+  }
+
+  const userSettings = await getUserSettings(userId);
+  const workspace = getWorkspaceConfigForRoot(foundRun.workspaceRoot, userSettings.remoteWorkspace);
+  if (!workspace?.ssh?.enabled) {
+    return { ok: false, reason: 'Remote workspace is no longer configured.' };
+  }
+
+  const agentSession = await agentSessionRepository.findSessionByAgentRunId(runId);
+  if (!agentSession) {
+    return { ok: false, reason: 'No persisted session found for this run.' };
+  }
+
+  // Pre-check: refuse to rewind if the target is the first message in the
+  // session — leaving an empty session would break the next iteration's
+  // prompt build, which expects at least one user message.
+  const beforeTruncate = await agentSessionRepository.listMessagesWithParts(agentSession.id);
+  if (beforeTruncate.length === 0 || beforeTruncate[0].info.id === messageId) {
+    return { ok: false, reason: 'Cannot rewind past the initial prompt.' };
+  }
+
+  const removed = await agentSessionRepository.truncateMessagesFrom(agentSession.id, messageId);
+  if (removed === 0) {
+    return { ok: false, reason: 'Target step not found in this run.' };
+  }
+
+  const remaining = await agentSessionRepository.listMessagesWithParts(agentSession.id);
+
+  // Stale tool parts shouldn't exist after truncation (we deleted their
+  // owning messages), but be defensive — same shape as the resume path.
+  for (const msg of remaining) {
+    for (const part of msg.parts) {
+      if (!isV2ToolPart(part)) continue;
+      if (part.state.status !== 'pending' && part.state.status !== 'running') continue;
+      const startedAt =
+        part.state.status === 'running' && part.state.time?.start
+          ? part.state.time.start
+          : Date.now();
+      const repaired: V2ToolPart = {
+        ...part,
+        state: {
+          status: 'error',
+          input: part.state.input,
+          error: 'Run was interrupted before this tool finished.',
+          time: { start: startedAt, end: Date.now() },
+        },
+      };
+      await agentSessionRepository.upsertPart(repaired);
+    }
+  }
+
+  // Append a system reminder so the model knows it's resuming from a rewound
+  // history (without it the next iteration may try to recall results from the
+  // discarded turns).
+  const rewindMessageId: string = MessageID.ascending();
+  await agentSessionRepository.upsertMessage({
+    id: rewindMessageId,
+    sessionID: agentSession.id,
+    role: 'user',
+    time: { created: Date.now() },
+    agent: 'ssh-agent',
+    model: { providerID: 'llama', modelID: foundRun.model || userSettings.remoteWorkspace.agentModel || '' },
+  } as V2UserMessage);
+  await agentSessionRepository.upsertPart({
+    id: PartID.ascending(),
+    sessionID: agentSession.id,
+    messageID: rewindMessageId,
+    type: 'text',
+    text:
+      '<system-reminder>\nThe trace was rewound by the user. Anything that came after this point in the previous run was discarded. ' +
+      'Re-evaluate the situation from the surviving history (the workspace files reflect their CURRENT state, not the state at this step) and emit the next tool call. ' +
+      'Re-read files before acting on them if you need to verify their contents.\n</system-reminder>',
+  } as V2TextPart);
+
+  // Re-project the truncated history immediately so the UI snaps to the
+  // rewound trace without waiting for the new runner's first emit.
+  const projectedAfter = await agentSessionRepository.listMessagesWithParts(agentSession.id);
+  foundRun.steps = projectPartsToSteps(projectedAfter, { treatLastAssistantAsFinal: true });
+  foundRun.finalAnswer = findFinalAnswer(projectedAfter);
+  foundRun.status = 'running';
+  foundRun.error = undefined;
+  foundRun.updatedAt = new Date().toISOString();
+  io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(foundRun));
+  scheduleChatSave(foundSession);
+
+  spawnAndRunSshAgentRunner({
+    session: foundSession,
+    run: foundRun,
+    agentSession,
+    userId,
+    workspace,
+    sourceSocketChatId,
+    agentModel: foundRun.model || userSettings.remoteWorkspace.agentModel || '',
+    agentPrompt: foundRun.prompt,
+    workspaceRoot: foundRun.workspaceRoot,
+    contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+    reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+    autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
+  });
+
+  return { ok: true };
+}
+
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
 app.get('/api/settings', protect, async (req: AuthRequest, res) => {
   const userId = req.user!.id;
@@ -2921,6 +3056,30 @@ io.on('connection', (socket) => {
       socket.emit('agent-question-required', pending.payload);
     }
 
+    // Re-project steps from the persisted v2 messages for any run that has
+    // a v2 session. This refreshes runs created before sourceMessageID was
+    // added so the rewind affordance lights up after a page reload, instead
+    // of waiting for the next runner emit (which never comes for finished
+    // runs).
+    void (async () => {
+      let mutated = false;
+      for (const run of session.agentRuns) {
+        try {
+          const v2Session = await agentSessionRepository.findSessionByAgentRunId(run.id);
+          if (!v2Session) continue;
+          const messages = await agentSessionRepository.listMessagesWithParts(v2Session.id);
+          if (messages.length === 0) continue;
+          run.steps = projectPartsToSteps(messages, { treatLastAssistantAsFinal: true });
+          run.finalAnswer = findFinalAnswer(messages) ?? run.finalAnswer ?? null;
+          mutated = true;
+        } catch (error) {
+          console.error(`Failed to re-project steps for agent run ${run.id}:`, error);
+        }
+      }
+      if (mutated) {
+        socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
+      }
+    })();
     socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
 
     void (async () => {
@@ -3331,6 +3490,35 @@ io.on('connection', (socket) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[resume-agent-run] failed for run ${runId}:`, error);
       socket.emit('error', { message: `Resume failed: ${message}` });
+    }
+  });
+
+  socket.on('rollback-agent-run', async (data: { chatId: string; runId: string; messageId: string }) => {
+    if (!currentUserId) {
+      socket.emit('error', { message: 'Not authenticated' });
+      return;
+    }
+    const chatId = String(data?.chatId || '').trim();
+    const runId = String(data?.runId || '').trim();
+    const messageId = String(data?.messageId || '').trim();
+    if (!chatId || !runId || !messageId) {
+      socket.emit('error', { message: 'chatId, runId, and messageId are required' });
+      return;
+    }
+    const session = chatSessions.get(chatId);
+    if (!session || session.userId !== currentUserId) {
+      socket.emit('error', { message: 'Chat not found' });
+      return;
+    }
+    try {
+      const result = await rollbackAgentRun(runId, currentUserId, chatId, messageId);
+      if (!result.ok) {
+        socket.emit('error', { message: `Cannot rewind agent run: ${result.reason}` });
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[rollback-agent-run] failed for run ${runId}:`, error);
+      socket.emit('error', { message: `Rewind failed: ${message}` });
     }
   });
 

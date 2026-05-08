@@ -298,6 +298,39 @@ export class AgentSessionRepository {
     const result = await execute('DELETE FROM agent_sessions WHERE chat_id = ?', [chatId]);
     return result.affectedRows;
   }
+
+  // Delete the target message + every message that came after it in the
+  // session, plus all parts attached to the deleted messages. Used by the
+  // SSH agent rollback path: clicking "rewind to here" on a trace entry
+  // discards that LLM iteration and everything later, so the next runner
+  // tick replays from the surviving prefix.
+  //
+  // Ordering matches `listMessagesWithParts` (time_created ASC, id ASC) so
+  // the cut respects the same total order the runner reads back.
+  async truncateMessagesFrom(sessionId: SessionID, messageId: MessageID): Promise<number> {
+    const target = await queryOne<RawMessageRow>(
+      'SELECT * FROM agent_session_messages WHERE id = ? AND session_id = ?',
+      [messageId, sessionId]
+    );
+    if (!target) return 0;
+    // Parts have ON DELETE CASCADE in the schema, but we delete them
+    // explicitly to keep the contract obvious and to support setups where
+    // the FK was added without cascade.
+    await execute(
+      `DELETE p FROM agent_session_parts p
+        JOIN agent_session_messages m ON m.id = p.message_id
+       WHERE m.session_id = ?
+         AND (m.time_created > ? OR (m.time_created = ? AND m.id >= ?))`,
+      [sessionId, target.time_created, target.time_created, messageId]
+    );
+    const result = await execute(
+      `DELETE FROM agent_session_messages
+        WHERE session_id = ?
+          AND (time_created > ? OR (time_created = ? AND id >= ?))`,
+      [sessionId, target.time_created, target.time_created, messageId]
+    );
+    return result.affectedRows;
+  }
 }
 
 export const agentSessionRepository = new AgentSessionRepository();

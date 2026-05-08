@@ -23,6 +23,10 @@ export interface AgentStep {
   actionName?: string;
   actionArgs?: Record<string, any>;
   targetMode?: AgentMode;
+  // Only populated by the v2 SSH agent surface (partProjection.ts). Identifies
+  // the v2 `agent_session_messages` row that produced this step so the UI can
+  // request a rewind back to that exact iteration.
+  sourceMessageID?: string;
 }
 
 export interface AgentState {

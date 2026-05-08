@@ -20,6 +20,9 @@ interface AgentStep {
   content: string;
   actionName?: string;
   actionArgs?: Record<string, any>;
+  // Only present on v2 SSH agent steps; links the trace entry back to the
+  // v2 message that produced it so the user can rewind to that point.
+  sourceMessageID?: string;
 }
 
 interface ChatTimings {
@@ -78,6 +81,10 @@ interface AgentTerminalEntry {
   args?: Record<string, any>;
   output?: string;
   status: 'running' | 'completed';
+  // v2 message id this entry came from, when known. Drives the "rewind to
+  // here" affordance — entries without it (initial prompt, steering messages)
+  // are not rewindable.
+  sourceMessageID?: string;
 }
 
 interface FinalAnswerTokenPayload {
@@ -1621,6 +1628,20 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     socket.emit('resume-agent-run', { chatId, runId });
   };
 
+  const rollbackAgentRun = (runId: string, messageId: string) => {
+    if (!socket) return;
+    const run = agentRuns[runId];
+    if (run?.status === 'running') {
+      window.alert('Stop the run before rewinding it.');
+      return;
+    }
+    const ok = window.confirm(
+      'Rewind the agent to this point?\n\nEverything after this step will be discarded and the agent will replay from here. Workspace files are NOT reverted — the agent will see them as they currently are.'
+    );
+    if (!ok) return;
+    socket.emit('rollback-agent-run', { chatId, runId, messageId });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -1932,6 +1953,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           command: getTerminalCommand(step),
           args: step.actionArgs,
           status: 'running',
+          sourceMessageID: step.sourceMessageID,
         });
         pendingActionIndex = entries.length - 1;
         continue;
@@ -1988,6 +2010,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           title: 'observation',
           output: step.content,
           status: 'completed',
+          sourceMessageID: step.sourceMessageID,
         });
         continue;
       }
@@ -1999,6 +2022,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           title: 'thought',
           output: step.content,
           status: 'completed',
+          sourceMessageID: step.sourceMessageID,
         });
         continue;
       }
@@ -2179,14 +2203,42 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     );
   };
 
-  const renderTerminalEntry = (entry: AgentTerminalEntry) => {
+  const renderTerminalEntry = (
+    entry: AgentTerminalEntry,
+    runId?: string
+  ) => {
+    // Show rewind whenever the entry maps to a v2 message; the backend will
+    // refuse with a clear error if the run is still active so the button
+    // doesn't silently no-op on running runs but is still visually present.
+    const canRewind = Boolean(runId && entry.sourceMessageID);
+    const rewindButton = canRewind ? (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          rollbackAgentRun(runId!, entry.sourceMessageID!);
+        }}
+        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-300 transition-colors hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-200"
+        title="Rewind the agent back to this step and replay from here"
+      >
+        <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a5 5 0 015 5v0a5 5 0 01-5 5H9" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 6l-4 4 4 4" />
+        </svg>
+        rewind
+      </button>
+    ) : null;
+
     // LLM narration ("thought") renders without the `$ thought` header — just
     // the text, so it reads as inline reasoning between commands.
     if (entry.type === 'thought') {
       return (
-        <div key={entry.id} className="border-b border-white/5 px-4 py-3 last:border-b-0">
-          <div className="text-sm leading-6 text-zinc-300 whitespace-pre-wrap">
-            {entry.output || entry.title}
+        <div key={entry.id} className="group border-b border-white/5 px-4 py-3 last:border-b-0">
+          <div className="flex items-start gap-2">
+            <div className="flex-1 text-sm leading-6 text-zinc-300 whitespace-pre-wrap">
+              {entry.output || entry.title}
+            </div>
+            {rewindButton}
           </div>
         </div>
       );
@@ -2206,7 +2258,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       : [];
 
     return (
-      <div key={entry.id} className="border-b border-white/5 px-4 py-3 last:border-b-0">
+      <div key={entry.id} className="group border-b border-white/5 px-4 py-3 last:border-b-0">
         <div className="flex min-w-0 items-center gap-2 font-mono text-xs">
           <span className={accent}>$</span>
           <span className="min-w-0 flex-1 truncate text-zinc-100">{entry.command || entry.title}</span>
@@ -2216,6 +2268,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               running
             </span>
           )}
+          {rewindButton}
         </div>
         {visibleArgs.length > 0 && (
           <div className="mt-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 font-mono text-[11px] leading-5 text-zinc-500">
@@ -2292,7 +2345,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               Waiting for the agent to start...
             </div>
           ) : (
-            terminalEntries.map(renderTerminalEntry)
+            terminalEntries.map((entry) => renderTerminalEntry(entry, run.id))
           )}
           {run.status === 'running' && (
             <div className="flex items-center gap-2 px-4 py-3 font-mono text-sm text-emerald-300">

@@ -52,6 +52,7 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
         steps.push({
           type: 'mode_transition',
           content: 'Context compacted: older history replaced with an anchored summary.',
+          sourceMessageID: msg.info.id,
         });
         return;
       }
@@ -61,6 +62,9 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
         .join('\n')
         .trim();
       if (text) {
+        // User-message entries do NOT carry sourceMessageID — the UI uses its
+        // presence to gate the "rewind to here" affordance, and rewinding to
+        // a user message would discard the prompt the run is built on.
         steps.push({ type: 'observation', content: `User Message: ${text}` });
       }
       return;
@@ -68,6 +72,7 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
 
     // assistant message
     const messageHasTool = msg.parts.some((p) => p.type === 'tool');
+    const sourceMessageID = msg.info.id;
     for (const part of msg.parts) {
       if (isTextPart(part)) {
         // Final-message narration goes to the chat bubble (handled by
@@ -77,7 +82,7 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
         const trimmed = part.text.trim();
         if (!trimmed) continue;
         if (messageHasTool) {
-          steps.push({ type: 'thought', content: trimmed });
+          steps.push({ type: 'thought', content: trimmed, sourceMessageID });
         }
         continue;
       }
@@ -95,6 +100,7 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
           steps.push({
             type: 'mode_transition',
             content: 'Switched to COMPOSE mode — composing the final answer.',
+            sourceMessageID,
           });
           continue;
         }
@@ -104,6 +110,7 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
           content: describeToolForUI(part.tool, args),
           actionName: part.tool,
           actionArgs: args,
+          sourceMessageID,
         });
 
         if (part.state.status === 'completed') {
@@ -118,17 +125,20 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
           steps.push({
             type: 'observation',
             content: `${attachmentsBlock}${part.state.output || ''}`,
+            sourceMessageID,
           });
         } else if (part.state.status === 'error') {
           steps.push({
             type: 'observation',
             content: `Error: ${part.state.error}`,
+            sourceMessageID,
           });
         } else if (part.state.status === 'running') {
           steps.push({
             type: 'tool_progress',
             content: 'Running…',
             actionName: part.tool,
+            sourceMessageID,
           });
         }
         // pending -> no observation step yet; the action alone is enough.
@@ -139,6 +149,7 @@ export function projectPartsToSteps(messages: WithParts[], options: ProjectionOp
         steps.push({
           type: 'mode_transition',
           content: 'Context compacted.',
+          sourceMessageID,
         });
         continue;
       }
