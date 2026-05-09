@@ -1685,11 +1685,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       );
     }
 
-    if (typeof value === 'object') {
+     if (typeof value === 'object') {
       return (
         <div className="overflow-hidden rounded-xl border border-white/5 bg-black/20">
-          <div className="max-h-64 overflow-auto p-3">
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-300">
+          <div className="max-h-64 overflow-auto">
+            <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-300">
               {JSON.stringify(value, null, 2)}
             </pre>
           </div>
@@ -1701,8 +1701,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     if (stringValue.includes('\n')) {
       return (
         <div className="overflow-hidden rounded-xl border border-white/5 bg-black/20">
-          <div className="max-h-64 overflow-auto p-3">
-            <pre className="whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-300">
+          <div className="max-h-64 overflow-auto">
+            <pre className="min-w-0 whitespace-pre-wrap break-words font-mono text-[12px] leading-5 text-zinc-300">
               {stringValue}
             </pre>
           </div>
@@ -1815,7 +1815,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const renderAgentStep = (step: AgentStep, idx: number) => {
     if (step.type === 'thought') {
       return (
-        <div key={idx} className="rounded-2xl border border-white/5 bg-black/20 p-3">
+        <div key={idx} className="min-w-0 overflow-hidden rounded-2xl border border-white/5 bg-black/20 p-3">
           <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.thought')}</span>
           <div className="mt-3 text-sm prose prose-invert max-w-none text-zinc-300">
             <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{step.content}</ReactMarkdown>
@@ -1825,7 +1825,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
     if (step.type === 'action') {
       return (
-        <div key={idx} className="rounded-2xl border border-white/5 bg-black/20 p-3">
+        <div key={idx} className="min-w-0 overflow-hidden rounded-2xl border border-white/5 bg-black/20 p-3">
           <div className="flex items-center gap-2">
             <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.toolCall')}</span>
             {step.actionName && (
@@ -1840,7 +1840,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
     if (step.type === 'observation') {
       return (
-        <div key={idx} className="rounded-2xl border border-white/5 bg-black/20 p-3">
+        <div key={idx} className="min-w-0 overflow-hidden rounded-2xl border border-white/5 bg-black/20 p-3">
           <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.observation')}</span>
           {renderObservationContent(step.content)}
         </div>
@@ -1848,7 +1848,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
     if (step.type === 'mode_transition') {
       return (
-        <div key={idx} className="rounded-2xl border border-blue-500/30 bg-blue-500/10 p-3">
+        <div key={idx} className="min-w-0 overflow-hidden rounded-2xl border border-blue-500/30 bg-blue-500/10 p-3">
           <div className="flex items-center gap-2">
             <svg className="size-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -2551,10 +2551,10 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
     return (
       <div key={`reasoning-${idx}`} className="max-w-3xl mx-auto space-y-2 mt-2 mb-2">
-        <div className="max-w-full break-words space-y-2 rounded-xl border border-white/5 bg-surface-100/50 p-3 sm:max-w-full sm:p-4">
+        <div className="min-w-0 max-w-full break-words space-y-2 overflow-hidden rounded-xl border border-white/5 bg-surface-100/50 p-3 sm:max-w-full sm:p-4">
           {stepsToDisplay.map((step, stepIdx) => renderAgentStep(step, stepIdx))}
           {isProcessingMsg && streamingThoughtContent && currentStepType === 'thought' && (
-            <div className="rounded-2xl border border-white/5 bg-black/20 p-3">
+            <div className="min-w-0 overflow-hidden rounded-2xl border border-white/5 bg-black/20 p-3">
               <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.thought')}</span>
               <div className="mt-3 text-sm prose prose-invert max-w-none text-zinc-300">
                 <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{streamingThoughtContent}</ReactMarkdown>
@@ -2562,8 +2562,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               </div>
             </div>
           )}
-          {isProcessingMsg && streamingContent && currentStepType === 'observation' && (
-            <div className="rounded-2xl border border-white/5 bg-black/20 p-3">
+  {isProcessingMsg && streamingContent && currentStepType === 'observation' && (
+             <div className="min-w-0 overflow-hidden rounded-2xl border border-white/5 bg-black/20 p-3">
               <span className="font-medium text-xs uppercase tracking-wide text-zinc-400">{t('chat.observation')}</span>
               <div className="mt-3 text-sm prose prose-invert max-w-none text-zinc-300">
                 <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{streamingContent}</ReactMarkdown>
