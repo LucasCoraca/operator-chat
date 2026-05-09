@@ -494,7 +494,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   // Conditional returns must come after all hooks
   if (isAuthLoading) {
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-[var(--bg-0)] text-[var(--fg-1)]">
+      <div className="h-screen w-full flex items-center justify-center bg-[var(--bg-0)] text-[var(--fg-1)]">
         <div className="flex flex-col items-center gap-4">
           <svg className="animate-spin h-8 w-8 text-[var(--accent)]" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -973,7 +973,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
 
   if (invalidChatId) {
     return (
-      <div className="h-screen w-screen overflow-hidden flex bg-[var(--bg-0)] text-[var(--fg-0)] font-[var(--font-sans)] antialiased">
+      <div className="h-screen w-full overflow-hidden flex bg-[var(--bg-0)] text-[var(--fg-0)] font-[var(--font-sans)] antialiased">
         <div className="flex-1 flex flex-col items-center justify-center">
           <h1 className="text-2xl font-semibold text-[var(--fg-0)] mb-4">Chat not found</h1>
           <p className="text-[var(--fg-2)] mb-6">The chat you're looking for doesn't exist.</p>
@@ -986,7 +986,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex bg-[var(--bg-0)] text-[var(--fg-0)] font-[var(--font-sans)] antialiased">
+    <div className="h-screen w-full overflow-hidden flex bg-[var(--bg-0)] text-[var(--fg-0)] font-[var(--font-sans)] antialiased">
       {/* Modals */}
       {showSettings && (
         <SettingsPanel 
