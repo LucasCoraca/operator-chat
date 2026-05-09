@@ -1042,7 +1042,6 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4v16m8-8H4" />
             </svg>
             <span>{t('sidebar.newChat')}</span>
-            <span className="kbd">⌘N</span>
           </button>
           <button
             onClick={openTasks}
