@@ -130,12 +130,12 @@ export const PreBlock: React.FC<PreBlockProps> = ({ children, node, ...props }) 
 
   if (!codeElement) {
     return (
-      <div className="rounded-xl overflow-hidden border border-white/10 bg-[#0d0d0d] shadow-lg my-4">
-        <div className="bg-[#1a1a1a] px-4 py-2 text-xs text-zinc-400 flex justify-between items-center border-b border-white/5">
-          <span className="font-mono">{language}</span>
+      <div className="rounded-[var(--radius)] overflow-hidden hairline-strong studio-card my-4">
+        <div className="bg-[var(--bg-1)] px-4 py-2 text-xs text-[var(--fg-2)] flex justify-between items-center border-b hairline">
+          <span className="mono">{language}</span>
           <button
             onClick={handleCopy}
-            className="hover:text-zinc-100 flex items-center gap-1.5 transition-colors"
+          className="hover:text-[var(--fg-0)] flex items-center gap-1.5 transition-colors"
           >
             {copied ? (
               <>
@@ -155,19 +155,19 @@ export const PreBlock: React.FC<PreBlockProps> = ({ children, node, ...props }) 
           </button>
         </div>
         <div className="p-4">
-          <pre className="m-0 font-mono text-[13px] leading-relaxed text-zinc-300 whitespace-pre-wrap break-words overflow-x-auto">{children}</pre>
+          <pre className="m-0 mono text-[13px] leading-relaxed text-[var(--fg-1)] whitespace-pre-wrap break-words overflow-x-auto">{children}</pre>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl overflow-hidden border border-white/10 bg-[#0d0d0d] shadow-lg my-4">
-      <div className="bg-[#1a1a1a] px-4 py-2 text-xs text-zinc-400 flex justify-between items-center border-b border-white/5">
-        <span className="font-mono">{language}</span>
+    <div className="rounded-[var(--radius)] overflow-hidden hairline-strong studio-card my-4">
+      <div className="bg-[var(--bg-1)] px-4 py-2 text-xs text-[var(--fg-2)] flex justify-between items-center border-b hairline">
+        <span className="mono">{language}</span>
         <button
           onClick={handleCopy}
-          className="hover:text-zinc-100 flex items-center gap-1.5 transition-colors"
+          className="hover:text-[var(--fg-0)] flex items-center gap-1.5 transition-colors"
         >
           {copied ? (
             <>
@@ -187,8 +187,8 @@ export const PreBlock: React.FC<PreBlockProps> = ({ children, node, ...props }) 
         </button>
       </div>
       <div className="p-4">
-        <pre className="m-0 font-mono text-[13px] leading-relaxed text-zinc-300 overflow-x-auto">
-          <code className="bg-transparent text-zinc-300 p-0">{codeElement.props.children}</code>
+        <pre className="m-0 mono text-[13px] leading-relaxed text-[var(--fg-1)] overflow-x-auto">
+          <code className="bg-transparent text-[var(--fg-1)] p-0">{codeElement.props.children}</code>
         </pre>
       </div>
     </div>
@@ -198,7 +198,7 @@ export const PreBlock: React.FC<PreBlockProps> = ({ children, node, ...props }) 
 const CodeBlock: React.FC<CodeBlockProps> = ({ inline, className, children, ...props }) => {
   if (inline) {
     return (
-      <code className="bg-surface-200 px-1.5 py-0.5 rounded text-sm" {...props}>
+      <code className="bg-[rgba(255,255,255,.06)] px-1.5 py-0.5 rounded-[var(--radius-sm)] text-sm" {...props}>
         {children}
       </code>
     );

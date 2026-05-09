@@ -40,11 +40,11 @@ function formatDate(value: string | null | undefined, notScheduledLabel: string)
 
 function statusClass(status: ScheduledTask['status']) {
   switch (status) {
-    case 'active': return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
-    case 'paused': return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
-    case 'failed': return 'border-red-500/30 bg-red-500/10 text-red-200';
-    case 'completed': return 'border-blue-500/30 bg-blue-500/10 text-blue-200';
-    default: return 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300';
+    case 'active': return 'border-accent-line bg-accent-soft text-[var(--accent)]';
+    case 'paused': return 'border-amber-line bg-amber-soft text-amber';
+    case 'failed': return 'border-rose-line bg-rose-soft text-rose';
+    case 'completed': return 'border-blue-line bg-blue-soft text-blue';
+    default: return 'border-[var(--line)] bg-[rgba(255,255,255,.02)] text-[var(--fg-1)]';
   }
 }
 
@@ -186,47 +186,47 @@ export default function ScheduledTaskManager({ socket, currentChatId, currentMod
   };
 
   const renderTask = (task: ScheduledTask) => (
-    <div key={task.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/20 shadow-lg shadow-black/10">
+    <div key={task.id} className="overflow-hidden rounded-[var(--radius)] hairline studio-card">
       <div className="p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <h3 className="truncate text-base font-semibold text-zinc-100">{task.title}</h3>
+              <h3 className="truncate text-base font-semibold text-[var(--fg-0)]">{task.title}</h3>
               <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase ${statusClass(task.status)}`}>{t(`scheduler.status.${task.status}`)}</span>
             </div>
-            <p className="mt-2 line-clamp-2 text-sm leading-6 text-zinc-400">{task.prompt}</p>
+            <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--fg-2)]">{task.prompt}</p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-right">
-            <div className="text-[10px] uppercase tracking-[0.16em] text-zinc-500">{t('scheduler.nextRun')}</div>
-            <div className="mt-1 text-sm font-medium text-zinc-100">{formatDate(task.nextRunAt, notScheduledLabel)}</div>
+          <div className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.03)] px-3 py-2 text-right">
+            <div className="text-[10px] uppercase tracking-[0.16em] text-[var(--fg-3)]">{t('scheduler.nextRun')}</div>
+            <div className="mt-1 text-sm font-medium text-[var(--fg-0)]">{formatDate(task.nextRunAt, notScheduledLabel)}</div>
           </div>
         </div>
 
-        <div className="mt-4 grid gap-2 text-xs text-zinc-400 sm:grid-cols-3">
-          <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-            <div className="text-zinc-500">{t('scheduler.cadence')}</div>
-            <div className="mt-1 text-zinc-200">{describeSchedule(task)}</div>
+        <div className="mt-4 grid gap-2 text-xs text-[var(--fg-2)] sm:grid-cols-3">
+          <div className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.02)] px-3 py-2">
+            <div className="text-[var(--fg-3)]">{t('scheduler.cadence')}</div>
+            <div className="mt-1 text-[var(--fg-0)]">{describeSchedule(task)}</div>
           </div>
-          <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-            <div className="text-zinc-500">{t('scheduler.lastRun')}</div>
-            <div className="mt-1 text-zinc-200">{formatDate(task.lastRunAt, notScheduledLabel)}</div>
+          <div className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.02)] px-3 py-2">
+            <div className="text-[var(--fg-3)]">{t('scheduler.lastRun')}</div>
+            <div className="mt-1 text-[var(--fg-0)]">{formatDate(task.lastRunAt, notScheduledLabel)}</div>
           </div>
-          <div className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2">
-            <div className="text-zinc-500">{t('scheduler.model')}</div>
-            <div className="mt-1 truncate text-zinc-200">{task.model || t('scheduler.defaultModel')}</div>
+          <div className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.02)] px-3 py-2">
+            <div className="text-[var(--fg-3)]">{t('scheduler.model')}</div>
+            <div className="mt-1 truncate text-[var(--fg-0)]">{task.model || t('scheduler.defaultModel')}</div>
           </div>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 border-t border-white/5 bg-white/[0.02] px-4 py-3 text-xs">
-        <button onClick={() => mutateTask(task.id, 'run-now')} className="rounded-lg bg-brand px-3 py-1.5 font-medium text-white hover:bg-brand-dark">{t('scheduler.runNow')}</button>
+      <div className="flex flex-wrap gap-2 border-t hairline bg-[rgba(255,255,255,.02)] px-4 py-3 text-xs">
+        <button onClick={() => mutateTask(task.id, 'run-now')} className="rounded-[var(--radius-sm)] bg-[var(--accent)] px-3 py-1.5 font-medium text-[var(--accent-ink)] hover:bg-[var(--accent)]/80">{t('scheduler.runNow')}</button>
         {task.status === 'paused' ? (
-          <button onClick={() => mutateTask(task.id, 'resume')} className="rounded-lg border border-white/10 px-3 py-1.5 text-zinc-300 hover:bg-surface-100">{t('scheduler.resume')}</button>
+          <button onClick={() => mutateTask(task.id, 'resume')} className="rounded-[var(--radius-sm)] hairline px-3 py-1.5 text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.03)]">{t('scheduler.resume')}</button>
         ) : (
-          <button onClick={() => mutateTask(task.id, 'pause')} className="rounded-lg border border-white/10 px-3 py-1.5 text-zinc-300 hover:bg-surface-100">{t('scheduler.pause')}</button>
+          <button onClick={() => mutateTask(task.id, 'pause')} className="rounded-[var(--radius-sm)] hairline px-3 py-1.5 text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.03)]">{t('scheduler.pause')}</button>
         )}
-        {task.chatId && <button onClick={() => onOpenChat(task.chatId!)} className="rounded-lg border border-white/10 px-3 py-1.5 text-zinc-300 hover:bg-surface-100">{t('scheduler.openChat')}</button>}
-        <button onClick={() => mutateTask(task.id, 'delete')} className="ml-auto rounded-lg border border-red-500/20 px-3 py-1.5 text-red-300 hover:bg-red-500/10">{t('common.delete')}</button>
+        {task.chatId && <button onClick={() => onOpenChat(task.chatId!)} className="rounded-[var(--radius-sm)] hairline px-3 py-1.5 text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.03)]">{t('scheduler.openChat')}</button>}
+        <button onClick={() => mutateTask(task.id, 'delete')} className="ml-auto rounded-[var(--radius-sm)] border border-rose-line px-3 py-1.5 text-rose hover:bg-rose-soft">{t('common.delete')}</button>
       </div>
     </div>
   );
@@ -234,38 +234,38 @@ export default function ScheduledTaskManager({ socket, currentChatId, currentMod
   const renderSection = (title: string, description: string, sectionTasks: ScheduledTask[]) => (
     <section className="space-y-3">
       <div>
-        <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-400">{title}</h2>
-        <p className="mt-1 text-sm text-zinc-500">{description}</p>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-[var(--fg-2)]">{title}</h2>
+        <p className="mt-1 text-sm text-[var(--fg-3)]">{description}</p>
       </div>
-      {sectionTasks.length > 0 ? <div className="grid gap-3">{sectionTasks.map(renderTask)}</div> : <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-5 text-sm text-zinc-500">{t('scheduler.noTasksHere')}</div>}
+      {sectionTasks.length > 0 ? <div className="grid gap-3">{sectionTasks.map(renderTask)}</div> : <div className="rounded-[var(--radius)] border border-dashed hairline bg-[rgba(255,255,255,.02)] p-5 text-sm text-[var(--fg-3)]">{t('scheduler.noTasksHere')}</div>}
     </section>
   );
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-8">
       <div className="mx-auto max-w-5xl space-y-6">
-        <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(16,163,127,0.22),transparent_35%),linear-gradient(135deg,rgba(255,255,255,0.05),rgba(255,255,255,0.01))] p-6 shadow-2xl shadow-black/20">
+        <div className="overflow-hidden rounded-[var(--radius)] hairline-strong studio-card p-6">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.22em] text-brand">{t('scheduler.automation')}</div>
-              <h1 className="mt-2 text-2xl font-semibold text-zinc-100">{t('scheduler.title')}</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{t('scheduler.description')}</p>
+              <div className="eyebrow text-[var(--accent)]">{t('scheduler.automation')}</div>
+              <h1 className="mt-2 text-2xl font-semibold text-[var(--fg-0)]">{t('scheduler.title')}</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--fg-2)]">{t('scheduler.description')}</p>
             </div>
-            <button onClick={() => setShowCreate((prev) => !prev)} className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white shadow-lg shadow-brand/20 hover:bg-brand-dark">
+            <button onClick={() => setShowCreate((prev) => !prev)} className="rounded-[var(--radius)] bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-ink)] shadow-1 shadow-[var(--accent)]/20 hover:bg-[var(--accent)]/80">
               {showCreate ? t('common.close') : t('scheduler.newTask')}
             </button>
           </div>
 
           {showCreate && (
-            <div className="mt-6 rounded-2xl border border-white/10 bg-[#141415]/70 p-4">
+            <div className="mt-6 rounded-[var(--radius)] hairline bg-[var(--bg-0)]/70 p-4">
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="grid gap-1.5 text-sm">
-                  <span className="text-zinc-400">{t('scheduler.form.title')}</span>
-                  <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-zinc-100 outline-none focus:ring-2 focus:ring-brand/40" placeholder={t('scheduler.form.titlePlaceholder')} />
+                  <span className="text-[var(--fg-2)]">{t('scheduler.form.title')}</span>
+                  <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] px-3 py-2 text-[var(--fg-0)] outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]" placeholder={t('scheduler.form.titlePlaceholder')} />
                 </label>
                 <label className="grid gap-1.5 text-sm">
-                  <span className="text-zinc-400">{t('scheduler.form.schedule')}</span>
-                  <select value={form.scheduleType} onChange={(e) => setForm({ ...form, scheduleType: e.target.value as ScheduledTask['scheduleType'] })} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-zinc-100 outline-none focus:ring-2 focus:ring-brand/40">
+                  <span className="text-[var(--fg-2)]">{t('scheduler.form.schedule')}</span>
+                  <select value={form.scheduleType} onChange={(e) => setForm({ ...form, scheduleType: e.target.value as ScheduledTask['scheduleType'] })} className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] px-3 py-2 text-[var(--fg-0)] outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]">
                     <option value="once">{t('scheduler.scheduleTypes.once')}</option>
                     <option value="daily">{t('scheduler.scheduleTypes.daily')}</option>
                     <option value="weekdays">{t('scheduler.scheduleTypes.weekdays')}</option>
@@ -274,46 +274,46 @@ export default function ScheduledTaskManager({ socket, currentChatId, currentMod
                   </select>
                 </label>
                 <label className="grid gap-1.5 text-sm md:col-span-2">
-                  <span className="text-zinc-400">{t('scheduler.form.instruction')}</span>
-                  <textarea value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} className="min-h-[110px] rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-zinc-100 outline-none focus:ring-2 focus:ring-brand/40" placeholder={t('scheduler.form.instructionPlaceholder')} />
+                  <span className="text-[var(--fg-2)]">{t('scheduler.form.instruction')}</span>
+                  <textarea value={form.prompt} onChange={(e) => setForm({ ...form, prompt: e.target.value })} className="min-h-[110px] rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] px-3 py-2 text-[var(--fg-0)] outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]" placeholder={t('scheduler.form.instructionPlaceholder')} />
                 </label>
                 {form.scheduleType === 'once' ? (
                   <label className="grid gap-1.5 text-sm">
-                    <span className="text-zinc-400">{t('scheduler.form.runAt')}</span>
-                    <input type="datetime-local" value={form.runAt} onChange={(e) => setForm({ ...form, runAt: e.target.value })} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-zinc-100 outline-none focus:ring-2 focus:ring-brand/40" />
+                    <span className="text-[var(--fg-2)]">{t('scheduler.form.runAt')}</span>
+                    <input type="datetime-local" value={form.runAt} onChange={(e) => setForm({ ...form, runAt: e.target.value })} className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] px-3 py-2 text-[var(--fg-0)] outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]" />
                   </label>
                 ) : form.scheduleType === 'interval' ? (
                   <label className="grid gap-1.5 text-sm">
-                    <span className="text-zinc-400">{t('scheduler.form.everyMinutes')}</span>
-                    <input type="number" min={1} value={form.intervalMinutes} onChange={(e) => setForm({ ...form, intervalMinutes: Number(e.target.value) })} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-zinc-100 outline-none focus:ring-2 focus:ring-brand/40" />
+                    <span className="text-[var(--fg-2)]">{t('scheduler.form.everyMinutes')}</span>
+                    <input type="number" min={1} value={form.intervalMinutes} onChange={(e) => setForm({ ...form, intervalMinutes: Number(e.target.value) })} className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] px-3 py-2 text-[var(--fg-0)] outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]" />
                   </label>
                 ) : (
                   <label className="grid gap-1.5 text-sm">
-                    <span className="text-zinc-400">{t('scheduler.form.time')}</span>
-                    <input type="time" value={form.timeOfDay} onChange={(e) => setForm({ ...form, timeOfDay: e.target.value })} className="rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-zinc-100 outline-none focus:ring-2 focus:ring-brand/40" />
+                    <span className="text-[var(--fg-2)]">{t('scheduler.form.time')}</span>
+                    <input type="time" value={form.timeOfDay} onChange={(e) => setForm({ ...form, timeOfDay: e.target.value })} className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] px-3 py-2 text-[var(--fg-0)] outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]" />
                   </label>
                 )}
                 {form.scheduleType === 'weekly' && (
                   <div className="grid gap-1.5 text-sm">
-                    <span className="text-zinc-400">{t('scheduler.form.days')}</span>
+                    <span className="text-[var(--fg-2)]">{t('scheduler.form.days')}</span>
                     <div className="flex flex-wrap gap-2">
                       {dayLabels.map((label, index) => (
-                        <button key={label} type="button" onClick={() => toggleDay(index)} className={`rounded-lg border px-2.5 py-1.5 text-xs ${form.daysOfWeek.includes(index) ? 'border-brand bg-brand/20 text-brand' : 'border-white/10 text-zinc-400 hover:bg-surface-100'}`}>{label}</button>
+                        <button key={label} type="button" onClick={() => toggleDay(index)} className={`rounded-[var(--radius-sm)] hairline px-2.5 py-1.5 text-xs ${form.daysOfWeek.includes(index) ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]' : 'hairline text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.03)]'}`}>{label}</button>
                       ))}
                     </div>
                   </div>
                 )}
-                <label className="flex items-center gap-2 text-sm text-zinc-400">
-                  <input type="checkbox" checked={form.attachToCurrentChat} onChange={(e) => setForm({ ...form, attachToCurrentChat: e.target.checked })} disabled={!currentChatId} className="h-4 w-4 rounded border-white/10 bg-black/20 text-brand" />
+                <label className="flex items-center gap-2 text-sm text-[var(--fg-2)]">
+                  <input type="checkbox" checked={form.attachToCurrentChat} onChange={(e) => setForm({ ...form, attachToCurrentChat: e.target.checked })} disabled={!currentChatId} className="h-4 w-4 rounded-[var(--radius-sm)] hairline bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--accent)]" />
                   {t('scheduler.form.attachToCurrentChat')}
                 </label>
-                <button onClick={createTask} className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white hover:bg-brand-dark md:justify-self-end">{t('scheduler.createTask')}</button>
+                <button onClick={createTask} className="rounded-[var(--radius)] bg-[var(--accent)] px-4 py-2 text-sm font-medium text-[var(--accent-ink)] hover:bg-[var(--accent)]/80 md:justify-self-end">{t('scheduler.createTask')}</button>
               </div>
             </div>
           )}
         </div>
 
-        {loading ? <div className="text-sm text-zinc-500">{t('scheduler.loadingTasks')}</div> : (
+        {loading ? <div className="text-sm text-[var(--fg-3)]">{t('scheduler.loadingTasks')}</div> : (
           <>
             {renderSection(t('scheduler.sections.attention'), t('scheduler.sections.attentionDescription'), grouped.attention)}
             {renderSection(t('scheduler.sections.active'), t('scheduler.sections.activeDescription'), grouped.active)}

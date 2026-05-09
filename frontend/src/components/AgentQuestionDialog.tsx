@@ -74,25 +74,25 @@ export function AgentQuestionDialog({ question, onAnswer, onDismiss }: Props) {
   // dialog persist visually across page reloads (the parent component re-
   // renders it from socket state on reconnect).
   return (
-    <div className="border-t border-emerald-500/30 bg-emerald-500/5">
+    <div className="border-t border-accent-line bg-accent-soft/50">
       <div className="px-5 py-4">
-        <div className="text-xs uppercase tracking-wide text-emerald-400">Agent question</div>
-        <div className="mt-1 text-base font-medium text-zinc-100">{question.question}</div>
+        <div className="text-xs uppercase tracking-wide text-[var(--accent)]">Agent question</div>
+        <div className="mt-1 text-base font-medium text-[var(--fg-0)]">{question.question}</div>
       </div>
 
       {question.options.length > 0 && question.allowCustomAnswer && (
-        <div className="flex border-y border-white/10 bg-black/20 text-xs">
+        <div className="flex border-y hairline bg-[rgba(255,255,255,.02)] text-xs">
           <button
             type="button"
             onClick={() => setActiveTab('options')}
-            className={`flex-1 px-4 py-2 ${activeTab === 'options' ? 'border-b-2 border-emerald-400 text-emerald-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`flex-1 px-4 py-2 ${activeTab === 'options' ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}
           >
             Options
           </button>
           <button
             type="button"
             onClick={() => setActiveTab('custom')}
-            className={`flex-1 px-4 py-2 ${activeTab === 'custom' ? 'border-b-2 border-emerald-400 text-emerald-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+            className={`flex-1 px-4 py-2 ${activeTab === 'custom' ? 'border-b-2 border-[var(--accent)] text-[var(--accent)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}
           >
             Type my own answer
           </button>
@@ -109,15 +109,15 @@ export function AgentQuestionDialog({ question, onAnswer, onDismiss }: Props) {
                   key={option.value}
                   type="button"
                   onClick={() => handleToggle(option.value)}
-                  className={`flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                  className={`flex w-full items-center justify-between rounded-[var(--radius-sm)] hairline px-3 py-2 text-left text-sm transition-colors ${
                     isSelected
-                      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100'
-                      : 'border-white/10 bg-black/30 text-zinc-200 hover:border-white/30'
+                      ? 'border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--fg-0)]'
+                      : 'hairline bg-[rgba(255,255,255,.02)] text-[var(--fg-0)] hover:hairline-strong'
                   }`}
                 >
                   <span>{option.label}</span>
                   {option.recommended && (
-                    <span className="ml-2 rounded-full border border-emerald-500/40 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
+                    <span className="ml-2 rounded-full hairline-strong border-accent-line px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--accent)]">
                       recommended
                     </span>
                   )}
@@ -125,7 +125,7 @@ export function AgentQuestionDialog({ question, onAnswer, onDismiss }: Props) {
               );
             })}
             {question.multiple && (
-              <p className="mt-2 text-xs text-zinc-500">Multiple selection allowed.</p>
+              <p className="mt-2 text-xs text-[var(--fg-3)]">Multiple selection allowed.</p>
             )}
           </div>
         )}
@@ -137,20 +137,20 @@ export function AgentQuestionDialog({ question, onAnswer, onDismiss }: Props) {
               onChange={(event) => setCustomText(event.target.value)}
               rows={3}
               placeholder="Type your answer to send to the agent"
-              className="w-full resize-none rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-emerald-500/40"
+              className="w-full resize-none rounded-[var(--radius-sm)] hairline bg-[rgba(255,255,255,.02)] px-3 py-2 text-sm text-[var(--fg-0)] outline-none placeholder:text-[var(--fg-0)]/40 focus:border-[var(--accent-line)]"
             />
-            <p className="mt-2 text-xs text-zinc-500">
+            <p className="mt-2 text-xs text-[var(--fg-3)]">
               Tip: typing a regular chat message also dismisses this question and sends a steering update.
             </p>
           </div>
         )}
       </div>
 
-      <div className="flex items-center justify-end gap-2 border-t border-white/10 bg-black/30 px-5 py-3">
+      <div className="flex items-center justify-end gap-2 border-t hairline bg-[rgba(255,255,255,.02)] px-5 py-3">
         <button
           type="button"
           onClick={onDismiss}
-          className="rounded-lg border border-white/10 px-3 py-1.5 text-sm text-zinc-300 hover:border-white/30"
+          className="rounded-[var(--radius-sm)] hairline px-3 py-1.5 text-sm text-[var(--fg-1)] hover:hairline-strong"
         >
           Ignore
         </button>
@@ -158,7 +158,7 @@ export function AgentQuestionDialog({ question, onAnswer, onDismiss }: Props) {
           type="button"
           onClick={handleSubmit}
           disabled={!canSubmit}
-          className="rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-black transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-40"
+          className="rounded-[var(--radius-sm)] bg-[var(--accent)] px-3 py-1.5 text-sm font-medium text-[var(--accent-ink)] transition-colors hover:bg-[var(--accent)]/80 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Send answer
         </button>

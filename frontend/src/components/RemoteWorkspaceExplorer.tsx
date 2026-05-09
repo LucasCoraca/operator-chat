@@ -47,11 +47,11 @@ function gitStatusLabel(status?: string | null) {
 
 function gitStatusClass(status?: string | null) {
   if (!status) return '';
-  if (status.includes('??')) return 'border-sky-500/30 bg-sky-500/10 text-sky-200';
-  if (status.includes('M')) return 'border-amber-500/30 bg-amber-500/10 text-amber-200';
-  if (status.includes('A')) return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200';
-  if (status.includes('D')) return 'border-red-500/30 bg-red-500/10 text-red-200';
-  return 'border-zinc-500/30 bg-zinc-500/10 text-zinc-200';
+  if (status.includes('??')) return 'border-blue-line bg-blue-soft text-blue';
+  if (status.includes('M')) return 'border-amber-line bg-amber-soft text-amber';
+  if (status.includes('A')) return 'border-accent-line bg-accent-soft text-[var(--accent)]';
+  if (status.includes('D')) return 'border-rose-line bg-rose-soft text-rose';
+  return 'border-[var(--line)] bg-[rgba(255,255,255,.02)] text-[var(--fg-1)]';
 }
 
 function languageFromPath(filePath: string) {
@@ -76,19 +76,19 @@ function languageFromPath(filePath: string) {
 }
 
 function tokenClass(token: string) {
-  if (/^\/\/|^#|^\/\*/.test(token)) return 'text-zinc-500';
-  if (/^(['"`]).*\1$/.test(token)) return 'text-emerald-300';
-  if (/^\d+(\.\d+)?$/.test(token)) return 'text-amber-300';
-  if (codeKeywords.has(token)) return 'text-sky-300';
-  if (/^[A-Z][A-Za-z0-9_]*$/.test(token)) return 'text-violet-300';
-  return 'text-zinc-300';
+  if (/^\/\/|^#|^\/\*/.test(token)) return 'text-[var(--fg-3)]';
+  if (/^(['"`]).*\1$/.test(token)) return 'text-[var(--accent)]';
+  if (/^\d+(\.\d+)?$/.test(token)) return 'text-amber';
+  if (codeKeywords.has(token)) return 'text-blue';
+  if (/^[A-Z][A-Za-z0-9_]*$/.test(token)) return 'text-violet';
+  return 'text-[var(--fg-1)]';
 }
 
 function renderHighlightedLine(line: string, lineIndex: number) {
   const parts = line.split(/(\/\/.*|#.*|\/\*.*\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_$][A-Za-z0-9_$]*\b)/g);
   return (
     <div key={lineIndex} className="table-row">
-      <span className="table-cell select-none pr-4 text-right text-zinc-600">{lineIndex + 1}</span>
+      <span className="table-cell select-none pr-4 text-right text-[var(--fg-0)]/40">{lineIndex + 1}</span>
       <span className="table-cell whitespace-pre pr-4">
         {parts.map((part, index) => part ? (
           <span key={`${lineIndex}-${index}`} className={tokenClass(part)}>{part}</span>
@@ -259,7 +259,7 @@ function RemoteWorkspaceExplorer({ socket }: RemoteWorkspaceExplorerProps = {}) 
               setDraftContent(fileContent);
               setIsEditing(false);
             }}
-            className="rounded-lg border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:bg-white/5"
+            className="rounded-[var(--radius-sm)] hairline px-2 py-1 text-xs text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.03)]"
           >
             Cancel
           </button>
@@ -267,7 +267,7 @@ function RemoteWorkspaceExplorer({ socket }: RemoteWorkspaceExplorerProps = {}) 
             type="button"
             onClick={saveFile}
             disabled={saving}
-            className="rounded-lg bg-brand px-2 py-1 text-xs font-medium text-white hover:bg-brand-dark disabled:opacity-50"
+            className="rounded-[var(--radius-sm)] bg-[var(--accent)] px-2 py-1 text-xs font-medium text-[var(--accent-ink)] hover:bg-[var(--accent)]/80 disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save'}
           </button>
@@ -276,7 +276,7 @@ function RemoteWorkspaceExplorer({ socket }: RemoteWorkspaceExplorerProps = {}) 
         <button
           type="button"
           onClick={() => setIsEditing(true)}
-          className="rounded-lg border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:bg-white/5"
+          className="rounded-[var(--radius-sm)] hairline px-2 py-1 text-xs text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.03)]"
         >
           Edit
         </button>
@@ -286,136 +286,136 @@ function RemoteWorkspaceExplorer({ socket }: RemoteWorkspaceExplorerProps = {}) 
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      <div className="border-b border-white/5 bg-[#111111] p-3">
+      <div className="border-b hairline bg-[var(--bg-1)] p-3">
         <div className="flex items-center gap-2">
-          <button
-            onClick={goUp}
-            disabled={!currentPath}
-            className="rounded-lg border border-white/5 bg-[#27272a] px-2 py-1 text-sm text-zinc-300 transition-colors hover:bg-[#3f3f46] disabled:opacity-50"
-            aria-label="Go up"
-          >
-            ↑
-          </button>
-          <button
-            onClick={() => loadFiles(currentPath)}
-            className="rounded-lg border border-white/5 bg-[#27272a] px-2 py-1 text-sm text-zinc-300 transition-colors hover:bg-[#3f3f46]"
-            aria-label="Refresh remote workspace"
-          >
-            ↻
-          </button>
-          <span className="min-w-0 flex-1 truncate font-mono text-sm text-zinc-500">
-            {currentPath || '/'}
-          </span>
-        </div>
-      </div>
+      <button
+              onClick={goUp}
+              disabled={!currentPath}
+              className="rounded-[var(--radius-sm)] hairline bg-[var(--bg-elev)] px-2 py-1 text-sm text-[var(--fg-1)] transition-colors hover:bg-[rgba(255,255,255,.06)] disabled:opacity-50"
+              aria-label="Go up"
+            >
+              ↑
+            </button>
+            <button
+              onClick={() => loadFiles(currentPath)}
+              className="rounded-[var(--radius-sm)] hairline bg-[var(--bg-elev)] px-2 py-1 text-sm text-[var(--fg-1)] transition-colors hover:bg-[rgba(255,255,255,.06)]"
+             aria-label="Refresh remote workspace"
+           >
+             ↻
+           </button>
+           <span className="min-w-0 flex-1 truncate mono text-sm text-[var(--fg-3)]">
+             {currentPath || '/'}
+           </span>
+         </div>
+       </div>
 
-      {selectedFile && (
-        <div className="flex items-start justify-between gap-2 border-b border-white/5 bg-[#171717] p-2">
-          <div className="min-w-0 flex-1">
-            <div className="truncate font-mono text-sm text-zinc-300">{selectedFile}</div>
-            <div className="mt-0.5 flex items-center gap-2 text-[11px] text-zinc-600">
-              <span>{languageFromPath(selectedFile)}</span>
-              {selectedItem && <span>{formatBytes(selectedItem.size)}</span>}
-            </div>
-          </div>
-          {fileActions}
-        </div>
-      )}
+       {selectedFile && (
+         <div className="flex items-start justify-between gap-2 border-b hairline bg-[var(--bg-1)] p-2">
+           <div className="min-w-0 flex-1">
+             <div className="truncate mono text-sm text-[var(--fg-1)]">{selectedFile}</div>
+             <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[var(--fg-0)]/40">
+               <span>{languageFromPath(selectedFile)}</span>
+               {selectedItem && <span>{formatBytes(selectedItem.size)}</span>}
+             </div>
+           </div>
+           {fileActions}
+         </div>
+       )}
 
-      {error && (
-        <div className="border-b border-red-500/20 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
-          {error}
-        </div>
-      )}
+       {error && (
+         <div className="border-b border-rose-line bg-rose-soft px-3 py-2 text-xs leading-5 text-rose">
+           {error}
+         </div>
+       )}
 
-      <div className="flex min-h-0 flex-1 flex-col bg-[#141415]">
-        <div className="min-h-[240px] flex-1 overflow-auto border-b border-white/5">
-          {loading ? (
-            <p className="py-4 text-center text-sm text-zinc-600">Loading remote files...</p>
-          ) : sortedFiles.length === 0 ? (
-            <p className="py-4 text-center text-sm text-zinc-600">No files found.</p>
-          ) : (
-            <div className="min-w-[680px]">
-              <div className="grid grid-cols-[minmax(220px,1fr)_90px_160px_160px_90px] gap-3 border-b border-white/5 px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-zinc-600">
-                <span>Name</span>
-                <span>Size</span>
-                <span>Created</span>
-                <span>Modified</span>
-                <span>Git</span>
-              </div>
-              {sortedFiles.map((item) => {
-                const statusLabel = gitStatusLabel(item.gitStatus);
-                return (
-                  <button
-                    key={item.path}
-                    type="button"
-                    onClick={() => handleItemClick(item)}
-                    className={`grid w-full grid-cols-[minmax(220px,1fr)_90px_160px_160px_90px] gap-3 border-b border-white/5 px-3 py-2 text-left text-xs transition-colors ${
-                      selectedFile === item.path
-                        ? 'bg-brand/15'
-                        : 'hover:bg-[#27272a]'
-                    }`}
-                  >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className={item.isDirectory ? 'text-sky-300' : 'text-zinc-500'}>{item.isDirectory ? 'dir' : 'file'}</span>
-                      <span className="truncate font-mono text-zinc-200">{item.name || item.path}</span>
-                    </span>
-                    <span className="font-mono text-zinc-500">{item.isDirectory ? '-' : formatBytes(item.size)}</span>
-                    <span className="truncate text-zinc-500">{formatDate(item.createdAt)}</span>
-                    <span className="truncate text-zinc-500">{formatDate(item.modifiedAt)}</span>
-                    <span>
-                      {statusLabel && (
-                        <span className={`rounded-full border px-1.5 py-0.5 text-[10px] ${gitStatusClass(item.gitStatus)}`}>
-                          {statusLabel}
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
+       <div className="flex min-h-0 flex-1 flex-col bg-[var(--bg-0)]">
+         <div className="min-h-[240px] flex-1 overflow-auto border-b hairline">
+           {loading ? (
+             <p className="py-4 text-center text-sm text-[var(--fg-0)]/40">Loading remote files...</p>
+           ) : sortedFiles.length === 0 ? (
+             <p className="py-4 text-center text-sm text-[var(--fg-0)]/40">No files found.</p>
+           ) : (
+             <div className="min-w-[680px]">
+               <div className="grid grid-cols-[minmax(220px,1fr)_90px_160px_160px_90px] gap-3 border-b hairline px-3 py-2 text-[11px] uppercase tracking-[0.14em] text-[var(--fg-0)]/40">
+                 <span>Name</span>
+                 <span>Size</span>
+                 <span>Created</span>
+                 <span>Modified</span>
+                 <span>Git</span>
+               </div>
+               {sortedFiles.map((item) => {
+                 const statusLabel = gitStatusLabel(item.gitStatus);
+                 return (
+                   <button
+                     key={item.path}
+                     type="button"
+                     onClick={() => handleItemClick(item)}
+                     className={`grid w-full grid-cols-[minmax(220px,1fr)_90px_160px_160px_90px] gap-3 border-b hairline px-3 py-2 text-left text-xs transition-colors ${
+                        selectedFile === item.path
+                          ? 'bg-[var(--accent-soft)]'
+                          : 'hover:bg-[rgba(255,255,255,.06)]'
+                      }`}
+                   >
+                     <span className="flex min-w-0 items-center gap-2">
+                       <span className={item.isDirectory ? 'text-blue' : 'text-[var(--fg-3)]'}>{item.isDirectory ? 'dir' : 'file'}</span>
+                       <span className="truncate mono text-[var(--fg-0)]">{item.name || item.path}</span>
+                     </span>
+                     <span className="mono text-[var(--fg-3)]">{item.isDirectory ? '-' : formatBytes(item.size)}</span>
+                     <span className="truncate text-[var(--fg-3)]">{formatDate(item.createdAt)}</span>
+                     <span className="truncate text-[var(--fg-3)]">{formatDate(item.modifiedAt)}</span>
+                     <span>
+                       {statusLabel && (
+                         <span className={`rounded-full border px-1.5 py-0.5 text-[10px] ${gitStatusClass(item.gitStatus)}`}>
+                           {statusLabel}
+                         </span>
+                       )}
+                     </span>
+                   </button>
+                 );
+               })}
+             </div>
+           )}
+         </div>
 
-        <div className="flex min-h-[360px] flex-1 flex-col bg-[#0d0d0d]">
-          {selectedFile ? (
-            <>
-              <div className="border-b border-white/5 bg-[#1a1a1a] p-2">
-                <div className="min-w-0 flex-1">
-                  <div className="truncate font-mono text-sm text-zinc-300">{selectedFile}</div>
-                  <div className="mt-0.5 flex items-center gap-2 text-[11px] text-zinc-600">
-                    <span>{languageFromPath(selectedFile)}</span>
-                    {selectedItem && <span>{formatBytes(selectedItem.size)}</span>}
-                  </div>
-                </div>
-              </div>
+         <div className="flex min-h-[360px] flex-1 flex-col bg-[var(--bg-0)]">
+           {selectedFile ? (
+             <>
+               <div className="border-b hairline bg-[var(--bg-1)] p-2">
+                 <div className="min-w-0 flex-1">
+                   <div className="truncate mono text-sm text-[var(--fg-1)]">{selectedFile}</div>
+                   <div className="mt-0.5 flex items-center gap-2 text-[11px] text-[var(--fg-0)]/40">
+                     <span>{languageFromPath(selectedFile)}</span>
+                     {selectedItem && <span>{formatBytes(selectedItem.size)}</span>}
+                   </div>
+                 </div>
+               </div>
 
-              {isEditing ? (
-                <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5">
-                  <textarea
-                    value={draftContent}
-                    onChange={(event) => setDraftContent(event.target.value)}
-                    spellCheck={false}
-                    className="min-h-full w-full resize-none overflow-auto whitespace-pre bg-transparent font-mono text-xs leading-5 text-zinc-200 outline-none caret-emerald-300 selection:bg-emerald-500/20"
-                  />
-                </div>
-              ) : (
-                <div className="min-h-0 flex-1 overflow-auto p-3 font-mono text-xs leading-5">
-                  <div className="table min-w-full">
-                    {(fileContent || '').split('\n').map(renderHighlightedLine)}
-                  </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="flex flex-1 items-center justify-center px-4 text-center text-sm text-zinc-600">
-              Select a file to preview or edit it.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+               {isEditing ? (
+                 <div className="min-h-0 flex-1 overflow-auto p-3 mono text-xs leading-5">
+                   <textarea
+                     value={draftContent}
+                     onChange={(event) => setDraftContent(event.target.value)}
+                     spellCheck={false}
+                     className="min-h-full w-full resize-none overflow-auto whitespace-pre bg-transparent mono text-xs leading-5 text-[var(--fg-0)] outline-none caret-[var(--accent)] selection:bg-[var(--accent)]/20"
+                   />
+                 </div>
+               ) : (
+                 <div className="min-h-0 flex-1 overflow-auto p-3 mono text-xs leading-5">
+                   <div className="table min-w-full">
+                     {(fileContent || '').split('\n').map(renderHighlightedLine)}
+                   </div>
+                 </div>
+               )}
+             </>
+           ) : (
+             <div className="flex flex-1 items-center justify-center px-4 text-center text-sm text-[var(--fg-0)]/40">
+               Select a file to preview or edit it.
+             </div>
+           )}
+         </div>
+       </div>
+     </div>
+   );
 }
 
 export default RemoteWorkspaceExplorer;

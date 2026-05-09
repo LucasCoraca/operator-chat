@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agent Console</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="styles.css" />
+
+<style>
+  :root {
+    /* Warm graphite surfaces */
+    --bg-0: #0c0d0f;
+    --bg-1: #121316;
+    --bg-2: #181a1e;
+    --bg-3: #22252b;
+    --bg-elev: #1c1f24;
+
+    /* Hairlines */
+    --line: rgba(255,255,255,0.055);
+    --line-2: rgba(255,255,255,0.10);
+    --line-3: rgba(255,255,255,0.16);
+
+    /* Ivory foregrounds */
+    --fg-0: #ecedef;
+    --fg-1: #b8bbc1;
+    --fg-2: #7e828a;
+    --fg-3: #4f535b;
+
+    /* Accent — pistachio in OKLCH */
+    --accent: oklch(0.82 0.16 145);
+    --accent-ink: #0a1410;
+    --accent-soft: color-mix(in oklch, var(--accent) 14%, transparent);
+    --accent-line: color-mix(in oklch, var(--accent) 28%, transparent);
+    --accent-glow: color-mix(in oklch, var(--accent) 38%, transparent);
+
+    /* Status */
+    --amber: oklch(0.82 0.13 78);
+    --amber-soft: color-mix(in oklch, var(--amber) 12%, transparent);
+    --amber-line: color-mix(in oklch, var(--amber) 24%, transparent);
+    --rose: oklch(0.74 0.13 18);
+    --rose-soft: color-mix(in oklch, var(--rose) 11%, transparent);
+    --violet: oklch(0.75 0.13 290);
+    --blue: oklch(0.74 0.13 245);
+
+    /* Geometry */
+    --radius: 12px;
+    --radius-sm: 8px;
+    --radius-pill: 999px;
+
+    /* Elevation — keep it gentle; this UI is flat-ish */
+    --shadow-1: 0 1px 0 rgba(255,255,255,0.04) inset, 0 1px 2px rgba(0,0,0,0.35);
+    --shadow-2: 0 1px 0 rgba(255,255,255,0.04) inset,
+                0 8px 24px -10px rgba(0,0,0,0.6),
+                0 2px 6px -2px rgba(0,0,0,0.4);
+    --ring: 0 0 0 1px var(--line-2), 0 0 0 4px color-mix(in oklch, var(--accent) 15%, transparent);
+
+    /* Type */
+    --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --font-serif: 'Instrument Serif', ui-serif, Georgia, serif;
+    --font-mono: 'Geist Mono', 'JetBrains Mono', ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, color-mix(in oklch, var(--accent) 6%, transparent), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(120,140,255,0.04), transparent 60%),
+      var(--bg-0);
+    color: var(--fg-0);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+  #root { height: 100%; }
+  ::selection { background: var(--accent-soft); color: var(--fg-0); }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 999px; border: 3px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.12); background-clip: padding-box; border: 3px solid transparent; }
+
+  .mono { font-family: var(--font-mono); font-feature-settings: "ss01","cv11"; }
+  .serif { font-family: var(--font-serif); font-style: italic; letter-spacing: -0.01em; }
+
+  /* keyframes */
+  @keyframes pulse-dot {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(227,179,65,0.55); }
+    50% { box-shadow: 0 0 0 6px rgba(227,179,65,0); }
+  }
+  @keyframes blink {
+    0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  @keyframes fade-up {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="icons.jsx"></script>
+  <script type="text/babel" src="data.jsx"></script>
+  <script type="text/babel" src="files-data.jsx"></script>
+  <script type="text/babel" src="files.jsx"></script>
+  <script type="text/babel" src="turns.jsx"></script>
+  <script type="text/babel" src="sidebar.jsx"></script>
+  <script type="text/babel" src="rail.jsx"></script>
+  <script type="text/babel" src="composer.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

@@ -84,14 +84,14 @@ export function PersonalityModal({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-3 sm:p-4">
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-white/10 bg-[#1e1e20] shadow-2xl">
+      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-[var(--radius)] hairline bg-[var(--bg-elev)] shadow-2">
         <div className="p-4 sm:p-6">
             <div className="mb-5 flex items-start justify-between gap-4 sm:mb-6">
               <div>
-                <h2 className="text-2xl font-semibold text-zinc-100">
+                <h2 className="section-title text-[var(--fg-0)]">
                   {editingPersonality ? t('personality.editPersonality') : t('personality.createPersonality')}
                 </h2>
-                <p className="mt-1 text-sm text-zinc-500">
+                <p className="mt-1 text-sm text-[var(--fg-3)]">
                   {editingPersonality
                     ? t('personality.editPersonalityDescription')
                     : t('personality.createPersonalityDescription')}
@@ -100,7 +100,7 @@ export function PersonalityModal({
             <button
               type="button"
               onClick={onClose}
-              className="rounded-xl p-2 text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-200"
+              className="rounded-[var(--radius)] p-2 text-[var(--fg-3)] transition-colors hover:bg-[rgba(255,255,255,.03)] hover:text-[var(--fg-0)]"
               aria-label="Close"
             >
               <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -112,7 +112,7 @@ export function PersonalityModal({
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Name */}
             <div>
-              <label className="block text-sm text-zinc-400 mb-1">
+              <label className="block text-sm text-[var(--fg-2)] mb-1">
                 {t('personality.nameRequired')}
               </label>
               <input
@@ -121,13 +121,13 @@ export function PersonalityModal({
                 onChange={(e) => setName(e.target.value)}
                 placeholder={t('personality.name')}
                 required
-                className="w-full bg-[#27272a] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-transparent placeholder:text-zinc-600"
+                className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] placeholder:text-[var(--fg-0)]/40"
               />
             </div>
 
             {/* Description */}
             <div>
-              <label className="block text-sm text-zinc-400 mb-1">
+              <label className="block text-sm text-[var(--fg-2)] mb-1">
                 {t('personality.descriptionRequired')}
               </label>
               <input
@@ -136,19 +136,19 @@ export function PersonalityModal({
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={t('personality.shortDescription')}
                 required
-                className="w-full bg-[#27272a] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-transparent placeholder:text-zinc-600"
+                className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] placeholder:text-[var(--fg-0)]/40"
               />
             </div>
 
             {/* Tone */}
             <div>
-              <label className="block text-sm text-zinc-400 mb-1">
+              <label className="block text-sm text-[var(--fg-2)] mb-1">
                 {t('personality.communicationStyle')}
               </label>
               <select
                 value={tone}
                 onChange={(e) => handleToneChange(e.target.value)}
-                className="w-full bg-[#27272a] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-transparent"
+                className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
               >
                 {toneOptions.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -160,9 +160,9 @@ export function PersonalityModal({
 
             {/* System Prompt */}
             <div>
-              <label className="block text-sm text-zinc-400 mb-1">
+              <label className="block text-sm text-[var(--fg-2)] mb-1">
                 {t('personality.systemPrompt')}
-                <p className="mt-1 text-xs text-zinc-500">
+                <p className="mt-1 text-xs text-[var(--fg-3)]">
                   {t('personality.systemPromptDescription')}
                 </p>
               </label>
@@ -170,21 +170,21 @@ export function PersonalityModal({
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
                 rows={8}
-                className="w-full bg-[#27272a] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-transparent placeholder:text-zinc-600 font-mono text-sm"
+                className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] placeholder:text-[var(--fg-0)]/40 mono text-sm"
                 placeholder="Define the AI's behavior and response style..."
               />
             </div>
 
             {/* Preview */}
-            <div className="rounded-lg border border-white/10 bg-[#27272a] p-4">
-              <h4 className="text-sm font-medium text-zinc-300 mb-2">{t('personality.preview')}</h4>
-              <div className="text-sm text-zinc-500">
-                <span className="text-zinc-400">{t('personality.name')}:</span> {name || '—'}
+            <div className="rounded-[var(--radius-sm)] hairline bg-[var(--bg-elev)] p-4">
+              <h4 className="text-sm font-medium text-[var(--fg-1)] mb-2">{t('personality.preview')}</h4>
+              <div className="text-sm text-[var(--fg-3)]">
+                <span className="text-[var(--fg-2)]">{t('personality.name')}:</span> {name || '—'}
                 <div className="mt-1">
-                  <span className="text-zinc-400">{t('personality.shortDescription')}:</span> {description || '—'}
+                  <span className="text-[var(--fg-2)]">{t('personality.shortDescription')}:</span> {description || '—'}
                 </div>
                 <div className="mt-1">
-                  <span className="text-zinc-400">{t('personality.style')}:</span> {tone || '—'}
+                  <span className="text-[var(--fg-2)]">{t('personality.style')}:</span> {tone || '—'}
                 </div>
               </div>
             </div>
@@ -194,14 +194,14 @@ export function PersonalityModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 bg-[#27272a] hover:bg-[#3f3f46] rounded-lg text-zinc-300 transition-colors border border-white/10"
+                className="px-4 py-2 bg-[var(--bg-elev)] hover:bg-[rgba(255,255,255,.06)] rounded-[var(--radius-sm)] text-[var(--fg-1)] transition-colors hairline"
               >
                 {t('common.cancel')}
               </button>
               <button
                 type="submit"
                 disabled={!name.trim() || !description.trim()}
-                className="px-4 py-2 bg-brand hover:bg-brand-dark disabled:bg-zinc-600 disabled:cursor-not-allowed rounded-lg text-white transition-colors shadow-md shadow-brand/20"
+                className="px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent)]/80 disabled:bg-[var(--fg-2)] disabled:cursor-not-allowed rounded-[var(--radius-sm)] text-[var(--accent-ink)] transition-colors shadow-1"
               >
                 {editingPersonality ? t('personality.saveChanges') : t('personality.createPersonalityBtn')}
               </button>

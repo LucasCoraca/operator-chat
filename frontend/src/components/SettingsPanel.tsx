@@ -258,13 +258,13 @@ function SettingsPanel({
         <div className="space-y-6">
           <section className="space-y-4">
             <div>
-              <h3 className="text-lg font-semibold text-brand">{t('settings.language')}</h3>
-              <p className="mt-1 text-sm text-zinc-500">{t('settings.languageDescription')}</p>
+              <h3 className="section-title text-[var(--accent)]">{t('settings.language')}</h3>
+              <p className="mt-1 text-sm text-[var(--fg-3)]">{t('settings.languageDescription')}</p>
             </div>
             <select
               value={i18n.language}
               onChange={(e) => handleLanguageChange(e.target.value)}
-              className="w-full bg-[#27272a] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-transparent"
+              className="w-full bg-[rgba(255,255,255,.025)] text-[var(--fg-0)] rounded-[var(--radius)] px-3 py-2 border border-[var(--line)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
             >
               {supportedLanguages.map((lang) => (
                 <option key={lang.code} value={lang.code}>
@@ -274,19 +274,19 @@ function SettingsPanel({
             </select>
           </section>
 
-          <section className="space-y-4 rounded-xl border border-white/10 bg-black/20 p-4">
-            <h3 className="text-lg font-semibold text-brand">{t('settings.uiSettings')}</h3>
+          <section className="studio-card rounded-[var(--radius)] p-4">
+            <h3 className="section-title text-[var(--accent)]">{t('settings.uiSettings')}</h3>
 
             <div className="flex items-center justify-between gap-4">
               <div>
-                <label className="text-sm text-zinc-300">{t('settings.showStats')}</label>
-                <p className="text-xs text-zinc-500 mt-1">{t('settings.showStatsDescription')}</p>
+                <label className="text-sm text-[var(--fg-1)]">{t('settings.showStats')}</label>
+                <p className="text-xs text-[var(--fg-3)] mt-1">{t('settings.showStatsDescription')}</p>
               </div>
               <input
                 type="checkbox"
                 checked={formData.ui.showStats}
                 onChange={(e) => handleChange('ui', 'showStats', e.target.checked)}
-                className="w-4 h-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50 focus:ring-2"
+                className="w-4 h-4 rounded-[var(--radius-sm)] border border-[var(--line-2)] bg-[rgba(255,255,255,.025)] text-[var(--accent)] focus:ring-[var(--accent)]/50 focus:ring-2"
               />
             </div>
           </section>
@@ -298,8 +298,8 @@ function SettingsPanel({
       return (
         <div className="space-y-4">
           <div>
-            <h3 className="text-lg font-semibold text-brand">{t('settings.toolDefaults')}</h3>
-            <p className="mt-1 text-sm text-zinc-500">{t('settings.toolDefaultsDescription')}</p>
+            <h3 className="section-title text-[var(--accent)]">{t('settings.toolDefaults')}</h3>
+            <p className="mt-1 text-sm text-[var(--fg-3)]">{t('settings.toolDefaultsDescription')}</p>
           </div>
 
           <div className="grid gap-3 xl:grid-cols-2">
@@ -312,36 +312,36 @@ function SettingsPanel({
               return (
                 <div
                   key={tool.name}
-                  className="rounded-xl border border-white/10 bg-black/20 p-3"
+                  className="studio-card rounded-[var(--radius)] p-3"
                 >
                   <label className="flex cursor-pointer items-start gap-3">
                     <input
                       type="checkbox"
                       checked={preference.enabled}
                       onChange={() => toggleDefaultTool(tool.name)}
-                      className="mt-0.5 h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50"
+                      className="mt-0.5 h-4 w-4 rounded-[var(--radius-sm)] border border-[var(--line-2)] bg-[rgba(255,255,255,.025)] text-[var(--accent)] focus:ring-[var(--accent)]/50"
                     />
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-semibold text-zinc-100">{tool.name}</div>
-                      <div className="mt-1 text-xs leading-5 text-zinc-400">{tool.description}</div>
+                     <div className="min-w-0 flex-1">
+                      <div className="text-sm font-semibold text-[var(--fg-0)]">{tool.name}</div>
+                      <div className="mt-1 text-xs leading-5 text-[var(--fg-2)]">{tool.description}</div>
                     </div>
                   </label>
 
-                  <div className="mt-3 ml-7 flex items-center justify-between gap-3 rounded-lg border border-white/5 bg-white/[0.02] px-2.5 py-2">
-                    <span className="text-[11px] text-zinc-500">{t('settings.preApproveByDefault')}</span>
+                  <div className="mt-3 ml-7 flex items-center justify-between gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[rgba(255,255,255,.02)] px-2.5 py-2">
+                    <span className="text-[11px] text-[var(--fg-3)]">{t('settings.preApproveByDefault')}</span>
                     {tool.policy.supportsAutoApprove ? (
-                      <label className="flex items-center gap-2 text-[11px] text-zinc-300">
+                      <label className="flex items-center gap-2 text-[11px] text-[var(--fg-1)]">
                         <input
                           type="checkbox"
                           checked={preference.autoApprove}
                           onChange={() => toggleDefaultAutoApprove(tool.name)}
                           disabled={!preference.enabled}
-                          className="h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50 disabled:opacity-50"
+                          className="h-4 w-4 rounded-[var(--radius-sm)] border border-[var(--line-2)] bg-[rgba(255,255,255,.025)] text-[var(--accent)] focus:ring-[var(--accent)]/50 disabled:opacity-50"
                         />
                         <span>{t('settings.applyToNewChats')}</span>
                       </label>
                     ) : (
-                      <span className="text-[11px] text-zinc-600">{t('chat.disabledForHighRisk')}</span>
+                      <span className="text-[11px] text-[var(--fg-3)]">{t('chat.disabledForHighRisk')}</span>
                     )}
                   </div>
                 </div>
@@ -349,7 +349,7 @@ function SettingsPanel({
             })}
 
             {tools.length === 0 && (
-              <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-zinc-500">
+              <div className="studio-card rounded-[var(--radius)] px-4 py-3 text-sm text-[var(--fg-3)]">
                 {t('chat.noTools')}
               </div>
             )}
@@ -363,13 +363,13 @@ function SettingsPanel({
         <div className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-lg font-semibold text-brand">{t('settings.aiPersonality')}</h3>
-              <p className="mt-1 text-sm text-zinc-500">{t('settings.description')}</p>
+          <h3 className="section-title text-[var(--accent)]">{t('settings.aiPersonality')}</h3>
+            <p className="mt-1 text-sm text-[var(--fg-3)]">{t('settings.description')}</p>
             </div>
             <button
               type="button"
               onClick={onManagePersonalities}
-              className="flex shrink-0 items-center gap-1 px-3 py-1.5 text-sm rounded-lg border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+              className="flex shrink-0 items-center gap-1 px-3 py-1.5 text-sm rounded-[var(--radius-sm)] border border-transparent text-[var(--fg-2)] hover:text-[var(--fg-0)] hover:bg-[rgba(255,255,255,.05)] hover:border-[var(--line)] transition-colors"
             >
               <svg className="size-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -392,94 +392,94 @@ function SettingsPanel({
       return (
         <div className="space-y-5">
           <div>
-            <h3 className="text-lg font-semibold text-brand">Agent Workspace</h3>
-            <p className="mt-1 text-sm text-zinc-500">
+            <h3 className="section-title text-[var(--accent)]">Agent Workspace</h3>
+            <p className="mt-1 text-sm text-[var(--fg-3)]">
               Configure the SSH environment used by agent mode. Without this, coding agents will say setup is required.
             </p>
           </div>
 
-          <section className="space-y-4 rounded-xl border border-white/10 bg-black/20 p-4">
+          <section className="studio-card rounded-[var(--radius)] p-4">
             <label className="flex items-center justify-between gap-4">
               <span>
-                <span className="block text-sm font-medium text-zinc-100">Enable SSH agent workspace</span>
-                <span className="mt-1 block text-xs text-zinc-500">All agent commands and file edits run on this remote host.</span>
+                <span className="block text-sm font-medium text-[var(--fg-0)]">Enable SSH agent workspace</span>
+                <span className="mt-1 block text-xs text-[var(--fg-3)]">All agent commands and file edits run on this remote host.</span>
               </span>
               <input
                 type="checkbox"
                 checked={formData.remoteWorkspace.enabled}
                 onChange={(event) => handleRemoteWorkspaceChange('enabled', event.target.checked)}
-                className="h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50"
+                className="h-4 w-4 rounded-[var(--radius-sm)] border border-[var(--line-2)] bg-[rgba(255,255,255,.025)] text-[var(--accent)] focus:ring-[var(--accent)]/50"
               />
             </label>
 
             <div className="grid gap-3 md:grid-cols-2">
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Host or IP</span>
                 <input
                   value={formData.remoteWorkspace.host}
                   onChange={(event) => handleRemoteWorkspaceChange('host', event.target.value)}
                   placeholder="192.168.1.20"
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Port</span>
                 <input
                   type="number"
                   value={formData.remoteWorkspace.port}
                   onChange={(event) => handleRemoteWorkspaceChange('port', Number(event.target.value) || 22)}
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Username</span>
                 <input
                   value={formData.remoteWorkspace.username}
                   onChange={(event) => handleRemoteWorkspaceChange('username', event.target.value)}
                   placeholder="ubuntu"
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Workspace root</span>
                 <input
                   value={formData.remoteWorkspace.root}
                   onChange={(event) => handleRemoteWorkspaceChange('root', event.target.value)}
                   placeholder="/home/ubuntu/project"
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
             </div>
 
-            <label className="space-y-1 text-xs text-zinc-400">
+            <label className="space-y-1 text-xs text-[var(--fg-2)]">
               <span>Private SSH key</span>
               <textarea
                 value={formData.remoteWorkspace.privateKey || ''}
                 onChange={(event) => handleRemoteWorkspaceChange('privateKey', event.target.value)}
                 placeholder={formData.remoteWorkspace.hasPrivateKey ? 'A private key is already saved. Leave blank to keep it.' : '-----BEGIN OPENSSH PRIVATE KEY-----'}
                 rows={7}
-                className="w-full resize-y rounded-lg border border-white/10 bg-[#27272a] px-3 py-2 font-mono text-xs text-zinc-100 outline-none focus:border-brand/50"
+                className="w-full resize-y rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 py-2 mono text-xs text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 spellCheck={false}
               />
             </label>
 
-            <label className="flex items-center gap-2 text-xs text-zinc-400">
+            <label className="flex items-center gap-2 text-xs text-[var(--fg-2)]">
               <input
                 type="checkbox"
                 checked={formData.remoteWorkspace.strictHostKeyChecking}
                 onChange={(event) => handleRemoteWorkspaceChange('strictHostKeyChecking', event.target.checked)}
-                className="h-4 w-4 rounded border-white/10 bg-[#27272a] text-brand focus:ring-brand/50"
+                className="h-4 w-4 rounded-[var(--radius-sm)] border border-[var(--line-2)] bg-[rgba(255,255,255,.025)] text-[var(--accent)] focus:ring-[var(--accent)]/50"
               />
               Strict host key checking
             </label>
 
-            <div className="grid gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 md:grid-cols-3">
-              <label className="space-y-1 text-xs text-zinc-400 md:col-span-3">
+            <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.02)] p-3 md:grid-cols-3">
+              <label className="space-y-1 text-xs text-[var(--fg-2)] md:col-span-3">
                 <span>Agent model</span>
                 <select
                   value={formData.remoteWorkspace.agentModel || ''}
                   onChange={(event) => handleRemoteWorkspaceChange('agentModel', event.target.value || undefined)}
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 >
                   <option value="">Use current chat model</option>
                   {models.map((model) => (
@@ -488,29 +488,29 @@ function SettingsPanel({
                 </select>
               </label>
 
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Context window</span>
                 <input
                   type="number"
                   min={4096}
                   value={formData.remoteWorkspace.contextWindowTokens}
                   onChange={(event) => handleRemoteWorkspaceChange('contextWindowTokens', Number(event.target.value) || 128000)}
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
 
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Reserved output tokens</span>
                 <input
                   type="number"
                   min={0}
                   value={formData.remoteWorkspace.reservedOutputTokens}
                   onChange={(event) => handleRemoteWorkspaceChange('reservedOutputTokens', Number(event.target.value) || 0)}
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
 
-              <label className="space-y-1 text-xs text-zinc-400">
+              <label className="space-y-1 text-xs text-[var(--fg-2)]">
                 <span>Auto compact threshold</span>
                 <input
                   type="number"
@@ -518,19 +518,19 @@ function SettingsPanel({
                   max={98}
                   value={Math.round((formData.remoteWorkspace.autoCompactThreshold || 0.82) * 100)}
                   onChange={(event) => handleRemoteWorkspaceChange('autoCompactThreshold', Math.max(10, Math.min(98, Number(event.target.value) || 82)) / 100)}
-                  className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                  className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                 />
               </label>
 
-              <p className="text-xs leading-5 text-zinc-500 md:col-span-3">
+              <p className="text-xs leading-5 text-[var(--fg-3)] md:col-span-3">
                 The backend uses llama.cpp /tokenize to estimate prompt size. It prunes noisy tool output first and only asks the model to compact shared agent context when usage crosses this threshold.
               </p>
             </div>
 
-            <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+            <div className="space-y-3 studio-card rounded-[var(--radius)] p-3">
               <div>
-                <div className="text-sm font-medium text-zinc-100">Agent approvals</div>
-                <div className="mt-1 text-xs leading-5 text-zinc-500">
+                <div className="text-sm font-medium text-[var(--fg-0)]">Agent approvals</div>
+                <div className="mt-1 text-xs leading-5 text-[var(--fg-3)]">
                   Choose which spawned-agent tools pause for approval and which continue automatically.
                 </div>
               </div>
@@ -541,16 +541,16 @@ function SettingsPanel({
                   return (
                     <div
                       key={tool.name}
-                      className="grid gap-3 rounded-lg border border-white/5 bg-black/20 p-3 sm:grid-cols-[minmax(0,1fr)_12rem] sm:items-center"
+                      className="grid gap-3 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[rgba(255,255,255,.02)] p-3 sm:grid-cols-[minmax(0,1fr)_12rem] sm:items-center"
                     >
                       <div className="min-w-0">
-                        <div className="text-sm font-medium text-zinc-100">{tool.label}</div>
-                        <div className="mt-1 text-xs leading-5 text-zinc-500">{tool.description}</div>
+                        <div className="text-sm font-medium text-[var(--fg-0)]">{tool.label}</div>
+                        <div className="mt-1 text-xs leading-5 text-[var(--fg-3)]">{tool.description}</div>
                       </div>
                       <select
                         value={approval}
                         onChange={(event) => handleAgentToolApprovalChange(tool.name, event.target.value as 'ask' | 'auto-approve')}
-                        className="h-10 w-full rounded-lg border border-white/10 bg-[#27272a] px-3 text-sm text-zinc-100 outline-none focus:border-brand/50"
+                        className="h-10 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[rgba(255,255,255,.025)] px-3 text-sm text-[var(--fg-0)] outline-none hover:border-[var(--line-2)] focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)]"
                       >
                         <option value="ask">Ask first</option>
                         <option value="auto-approve">Auto-approve</option>
@@ -561,7 +561,7 @@ function SettingsPanel({
               </div>
 
               {agentToolApprovalOptions.some((tool) => getAgentToolApproval(tool.name) === 'auto-approve') && (
-                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
+                <div className="rounded-[var(--radius-sm)] border-[var(--rose-line)] bg-[var(--rose-soft)] px-3 py-2 text-xs leading-5 text-[var(--rose)]">
                   Auto-approve is dangerous. Agents will be able to use selected remote tools without stopping for confirmation, including commands or file edits if those are enabled.
                 </div>
               )}
@@ -574,8 +574,8 @@ function SettingsPanel({
     return (
       <div className="space-y-4">
         <div>
-          <h3 className="text-lg font-semibold text-brand">MCP Servers</h3>
-          <p className="mt-1 text-sm text-zinc-500">
+          <h3 className="section-title text-[var(--accent)]">MCP Servers</h3>
+          <p className="mt-1 text-sm text-[var(--fg-3)]">
             Add external MCP servers to extend tool capabilities.
           </p>
         </div>
@@ -587,16 +587,16 @@ function SettingsPanel({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4" onClick={handleBackdropClick}>
-      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#1e1e20] shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-start justify-between gap-4 border-b border-white/10 p-4 sm:p-6">
+      <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-[var(--bg-1)] shadow-2" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] p-4 sm:p-6">
           <div>
-            <h2 className="text-2xl font-semibold text-zinc-100">{t('settings.title')}</h2>
-            <p className="mt-1 text-sm text-zinc-500">{t('settings.description')}</p>
+            <h2 className="text-2xl font-semibold text-[var(--fg-0)]">{t('settings.title')}</h2>
+            <p className="mt-1 text-sm text-[var(--fg-3)]">{t('settings.description')}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl p-2 text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-200"
+            className="icon-btn"
             aria-label={t('common.close')}
           >
             <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -606,7 +606,7 @@ function SettingsPanel({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[220px_minmax(0,1fr)]">
-          <nav className="border-b border-white/10 p-3 md:border-b-0 md:border-r md:p-4">
+          <nav className="border-b border-[var(--line)] p-3 md:border-b-0 md:border-r md:p-4">
             <div className="flex gap-2 overflow-x-auto md:block md:space-y-1 md:overflow-visible">
               {sections.map((section) => {
                 const isActive = activeSection === section.id;
@@ -615,18 +615,16 @@ function SettingsPanel({
                     key={section.id}
                     type="button"
                     onClick={() => setActiveSection(section.id)}
-                    className={`flex min-w-max items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors md:w-full md:min-w-0 ${
-                      isActive
-                        ? 'bg-brand/15 text-zinc-100 ring-1 ring-brand/30'
-                        : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
+                    className={`task-item ${
+                      isActive ? 'active' : ''
                     }`}
                   >
-                    <span className={isActive ? 'text-brand' : 'text-zinc-500'}>
+                    <span className={isActive ? 'text-[var(--accent)]' : 'text-[var(--fg-3)]'}>
                       {section.icon}
                     </span>
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{section.label}</span>
-                      <span className="hidden truncate text-xs text-zinc-500 md:block">{section.description}</span>
+                      <span className="hidden truncate text-xs text-[var(--fg-3)] md:block">{section.description}</span>
                     </span>
                   </button>
                 );
@@ -639,18 +637,18 @@ function SettingsPanel({
           </div>
         </div>
 
-        <div className="flex justify-end gap-3 border-t border-white/10 p-4 sm:px-6">
+        <div className="flex justify-end gap-3 border-t border-[var(--line)] p-4 sm:px-6">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-[#27272a] hover:bg-[#3f3f46] rounded-lg text-zinc-300 transition-colors border border-white/10"
+            className="px-4 py-2 bg-[rgba(255,255,255,.03)] hover:bg-[rgba(255,255,255,.06)] rounded-[var(--radius-sm)] text-[var(--fg-1)] transition-colors border border-transparent"
           >
             {t('common.cancel')}
           </button>
           <button
             type="button"
             onClick={() => onSave(formData)}
-            className="px-4 py-2 bg-brand hover:bg-brand-dark rounded-lg text-white transition-colors shadow-md shadow-brand/20"
+            className="px-4 py-2 bg-[var(--accent)] text-[var(--accent-ink)] rounded-[var(--radius-sm)] transition-colors"
           >
             {t('common.save')}
           </button>
