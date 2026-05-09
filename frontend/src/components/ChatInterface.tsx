@@ -2519,7 +2519,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     if (!thoughtsExpanded) {
       return (
         <div key={`reasoning-${idx}`} className="max-w-3xl mx-auto">
-          <div className="bg-surface-100/50 rounded-xl p-3 border border-white/5 max-w-full">
+          <div className="mt-2 mb-2 bg-surface-100/50 rounded-xl p-3 border border-white/5 max-w-full">
             <div className="space-y-2">
               <div className="flex items-center gap-1.5 text-zinc-400">
                 <svg className="size-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2631,13 +2631,20 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </div>
           ) : (
             <div className={`w-fit min-w-0 max-w-full break-words rounded-2xl px-4 py-3 shadow-sm word-break max-w-full sm:px-5 sm:py-3.5 ${
-              isUser ? 'bg-surface-200 text-zinc-100' : 'bg-transparent text-zinc-100 rounded-tl-sm'
-            }`}>
-              {isUser ? (
-                <div className="max-w-full min-w-0 whitespace-pre-wrap break-words">
-                  {msg.content}
-                </div>
-              ) : (
+               isUser ? 'bg-surface-200 text-zinc-100' : 'bg-transparent text-zinc-100 rounded-tl-sm'
+             }`}>
+               {isUser ? (
+                 <div className="max-w-full min-w-0">
+                   <div className="mb-2 flex items-center">
+                     <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
+                       You
+                     </span>
+                   </div>
+                   <div className="max-w-full min-w-0 whitespace-pre-wrap break-words">
+                     {msg.content}
+                   </div>
+                 </div>
+               ) : (
                 <div className="max-w-full min-w-0">
                   {assistantModel && (
                     <div className="mb-3 flex items-center">
