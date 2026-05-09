@@ -2760,12 +2760,12 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
   const renderComposer = (extraClassName = '') => (
     <div className={`input-glow relative rounded-lg border border-[var(--line)] bg-[var(--bg-0)]/80 backdrop-blur-xl transition-all duration-200 ${extraClassName}`}>
-      <div className="flex items-center gap-1 px-1.5 py-0">
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
         <div className="relative" ref={toolPickerRef}>
           <button
             type="button"
             onClick={() => setShowToolPicker((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] transition-colors"
+            className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-sm font-medium text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] transition-colors"
           >
             <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.5 6h9m-9 6h9m-9 6h9M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
@@ -2897,11 +2897,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         )}
       </div>
         <div className="ml-auto flex items-center gap-1.5">
-          <span className="text-[11px] text-[var(--fg-3)]">Reasoning:</span>
+          <span className="text-sm text-[var(--fg-2)]">Reasoning:</span>
           <select
             value={reasoningEffort}
             onChange={(e) => setReasoningEffort(e.target.value as 'low' | 'medium' | 'high')}
-            className="rounded border border-[var(--line)] bg-transparent px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] focus:outline-none focus:border-[var(--line-3)]"
+            className="rounded border border-[var(--line)] bg-transparent px-2 py-1 text-sm text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] focus:outline-none focus:border-[var(--line-3)]"
           >
             <option value="low">Low</option>
             <option value="medium">Medium</option>
