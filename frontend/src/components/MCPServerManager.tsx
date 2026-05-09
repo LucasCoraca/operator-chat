@@ -139,19 +139,19 @@ export function MCPServerManager() {
           {servers.map((server) => (
             <div
               key={server.name}
-              className="rounded-xl border border-white/10 bg-[#27272a] p-4"
+              className="rounded-[var(--radius)] hairline studio-card p-4"
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-zinc-100">
+                    <span className="text-sm font-medium text-[var(--fg-0)]">
                       {server.name}
                     </span>
                     <span
                       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
                         server.connected
-                          ? 'bg-green-500/20 text-green-400'
-                          : 'bg-red-500/20 text-red-400'
+                          ? 'border-accent-line bg-accent-soft text-[var(--accent)]'
+                          : 'border-rose-line bg-rose-soft text-rose'
                       }`}
                     >
                       {server.connected ? 'Connected' : 'Disconnected'}
@@ -162,7 +162,7 @@ export function MCPServerManager() {
                       {server.tools.map((tool) => (
                         <span
                           key={tool}
-                          className="inline-flex items-center rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-[10px] text-zinc-400"
+                          className="inline-flex items-center rounded-full hairline-strong bg-[rgba(255,255,255,.03)] px-2 py-0.5 text-[10px] text-[var(--fg-2)]"
                         >
                           {tool}
                         </span>
@@ -170,13 +170,13 @@ export function MCPServerManager() {
                     </div>
                   )}
                   {server.error && (
-                    <p className="mt-1 text-xs text-red-400">{server.error}</p>
+                    <p className="mt-1 text-xs text-rose">{server.error}</p>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => handleReconnect(server.name)}
-                    className="rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                    className="rounded-[var(--radius-sm)] p-1.5 text-[var(--fg-3)] transition-colors hover:bg-[rgba(255,255,255,.03)] hover:text-[var(--fg-0)]"
                     title="Reconnect"
                   >
                     <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -185,7 +185,7 @@ export function MCPServerManager() {
                   </button>
                   <button
                     onClick={() => handleRemoveServer(server.name)}
-                    className="rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                    className="rounded-[var(--radius-sm)] p-1.5 text-[var(--fg-3)] transition-colors hover:bg-rose-soft hover:text-rose"
                     title="Remove"
                   >
                     <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -200,22 +200,22 @@ export function MCPServerManager() {
       )}
 
       {servers.length === 0 && !showAddForm && (
-        <div className="rounded-xl border border-dashed border-white/10 bg-[#27272a]/50 px-4 py-6 text-center">
-          <p className="text-sm text-zinc-500">No MCP servers configured</p>
+        <div className="rounded-[var(--radius)] border border-dashed hairline bg-[rgba(255,255,255,.02)] px-4 py-6 text-center">
+          <p className="text-sm text-[var(--fg-3)]">No MCP servers configured</p>
         </div>
       )}
 
       {/* Add Server Form */}
       {showAddForm ? (
-        <div className="rounded-xl border border-white/10 bg-[#27272a] p-4 space-y-4">
+        <div className="rounded-[var(--radius)] hairline studio-card p-4 space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-medium text-zinc-100">Add MCP Server</h4>
+            <h4 className="text-sm font-medium text-[var(--fg-0)]">Add MCP Server</h4>
             <button
               onClick={() => {
                 setShowAddForm(false);
                 setError(null);
               }}
-              className="rounded-lg p-1 text-zinc-500 hover:text-zinc-200"
+              className="rounded-[var(--radius-sm)] p-1 text-[var(--fg-3)] hover:text-[var(--fg-0)]"
             >
               <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -224,39 +224,39 @@ export function MCPServerManager() {
           </div>
 
           {error && (
-            <div className="rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-sm text-red-400">
+            <div className="rounded-lg bg-rose-soft border border-rose-line px-3 py-2 text-sm text-rose">
               {error}
             </div>
           )}
 
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Server Name</label>
+            <label className="block text-xs text-[var(--fg-2)] mb-1">Server Name</label>
             <input
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               placeholder="e.g., my-mcp-server"
-              className="w-full bg-[#1e1e20] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 text-sm placeholder:text-zinc-600"
+              className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] text-sm placeholder:text-[var(--fg-0)]/40"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Server URL</label>
+            <label className="block text-xs text-[var(--fg-2)] mb-1">Server URL</label>
             <input
               type="text"
               value={formData.url}
               onChange={(e) => setFormData({ ...formData, url: e.target.value })}
               placeholder="https://mcp-server.example.com/sse"
-              className="w-full bg-[#1e1e20] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 text-sm placeholder:text-zinc-600"
+              className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] text-sm placeholder:text-[var(--fg-0)]/40"
             />
           </div>
 
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">Transport Type</label>
+            <label className="block text-xs text-[var(--fg-2)] mb-1">Transport Type</label>
             <select
               value={formData.transportType}
               onChange={(e) => setFormData({ ...formData, transportType: e.target.value as MCPTransportType })}
-              className="w-full bg-[#1e1e20] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 text-sm"
+              className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] text-sm"
             >
               <option value="sse">SSE (Server-Sent Events)</option>
               <option value="streamable-http">Streamable HTTP</option>
@@ -265,13 +265,13 @@ export function MCPServerManager() {
           </div>
 
           <div>
-            <label className="block text-xs text-zinc-400 mb-1">API Key (optional)</label>
+            <label className="block text-xs text-[var(--fg-2)] mb-1">API Key (optional)</label>
             <input
               type="password"
               value={formData.apiKey}
               onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
               placeholder="Enter your API key"
-              className="w-full bg-[#1e1e20] text-zinc-100 rounded-lg px-3 py-2 border border-white/10 focus:outline-none focus:ring-2 focus:ring-brand/50 text-sm placeholder:text-zinc-600"
+              className="w-full bg-[rgba(255,255,255,.025)] border border-[var(--line)] text-[var(--fg-0)] rounded-[var(--radius-sm)] px-3 py-2 focus:outline-none focus:border-[var(--line-3)] focus:ring-2 focus:ring-[rgba(255,255,255,.025)] text-sm placeholder:text-[var(--fg-0)]/40"
             />
           </div>
 
@@ -281,14 +281,14 @@ export function MCPServerManager() {
                 setShowAddForm(false);
                 setError(null);
               }}
-              className="px-3 py-1.5 text-sm rounded-lg border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+              className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] hairline text-[var(--fg-2)] hover:text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.03)] transition-colors"
             >
               Cancel
             </button>
             <button
               onClick={handleAddServer}
               disabled={loading}
-              className="px-3 py-1.5 text-sm rounded-lg bg-brand text-white hover:bg-brand-dark transition-colors disabled:opacity-50"
+              className="px-3 py-1.5 text-sm rounded-[var(--radius-sm)] bg-[var(--accent)] text-[var(--accent-ink)] hover:bg-[var(--accent)]/80 transition-colors disabled:opacity-50"
             >
               {loading ? 'Adding...' : 'Add Server'}
             </button>
@@ -297,7 +297,7 @@ export function MCPServerManager() {
       ) : (
         <button
           onClick={() => setShowAddForm(true)}
-          className="w-full flex items-center justify-center gap-2 rounded-xl border border-dashed border-white/10 bg-[#27272a]/50 px-4 py-3 text-sm text-zinc-400 transition-colors hover:bg-[#27272a] hover:text-zinc-200"
+          className="w-full flex items-center justify-center gap-2 rounded-[var(--radius)] border border-dashed hairline bg-[rgba(255,255,255,.02)] px-4 py-3 text-sm text-[var(--fg-2)] transition-colors hover:bg-[var(--bg-elev)] hover:text-[var(--fg-1)]"
         >
           <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />

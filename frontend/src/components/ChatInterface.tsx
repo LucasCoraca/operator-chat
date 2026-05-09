@@ -519,13 +519,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const navigate = useNavigate();
   const initialMessageSentRef = useRef(false);
   const initialRouteState = (location.state as ChatRouteState | null) ?? null;
-  const enabledTools = availableTools.filter((tool) => toolPreferences[tool.name]?.enabled);
-  const allToolsEnabled = availableTools.length > 0 && enabledTools.length === availableTools.length;
-  const enabledToolCountLabel = availableTools.length === 0
-    ? t('chat.noTools')
-    : allToolsEnabled
-      ? t('chat.allTools')
-      : t('chat.toolCount', { count: enabledTools.length });
+ 
   const hasRunningAgentRun = useMemo(
     () => Object.values(agentRuns).some((run) => run.chatId === chatId && run.status === 'running'),
     [agentRuns, chatId]
@@ -2758,19 +2752,18 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const isEmptyState = messages.length === 0 && !isProcessing;
 
   const renderComposer = (extraClassName = '') => (
-    <div className={`input-glow relative rounded-[22px] border border-white/10 bg-surface-100 shadow-lg transition-all duration-200 sm:rounded-[24px] ${extraClassName}`}>
-      <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-3 pb-2 pt-3 sm:px-4">
+    <div className={`input-glow relative rounded-lg border border-[var(--line)] bg-[var(--bg-0)]/80 backdrop-blur-xl transition-all duration-200 ${extraClassName}`}>
+      <div className="flex items-center gap-1 px-1.5 py-0">
         <div className="relative" ref={toolPickerRef}>
           <button
             type="button"
             onClick={() => setShowToolPicker((prev) => !prev)}
-            className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 text-xs font-medium text-zinc-200 hover:bg-surface-200"
+            className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs font-medium text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] transition-colors"
           >
-            <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.5 6h9m-9 6h9m-9 6h9M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
+            <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.5 6h9m-9 6h9m-9 6h9M4.5 6h.01M4.5 12h.01M4.5 18h.01" />
             </svg>
-            <span>{t('chat.tools')}</span>
-            <span className="text-zinc-500">{enabledToolCountLabel}</span>
+            <span>Tools</span>
           </button>
 
           {showToolPicker && (
@@ -2874,16 +2867,38 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </div>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-2">
-          <span className="text-xs font-medium text-zinc-300">Reasoning:</span>
+        <div className="flex flex-1 items-center justify-center">
+        {showStats && (
+          <div className="flex items-center gap-3 text-[10px] text-[var(--fg-3)]">
+            {stats.tokensPerSec > 0 && (
+              <span className="flex items-center gap-1">
+                <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                <span className="text-[var(--fg-2)]">{stats.tokensPerSec}</span> tok/s
+              </span>
+            )}
+            {stats.contextSize > 0 && (
+              <span className="flex items-center gap-1">
+                <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                </svg>
+                <span className="text-[var(--fg-2)]">{stats.contextSize}</span> tokens
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+        <div className="ml-auto flex items-center gap-1.5">
+          <span className="text-[11px] text-[var(--fg-3)]">Reasoning:</span>
           <select
             value={reasoningEffort}
             onChange={(e) => setReasoningEffort(e.target.value as 'low' | 'medium' | 'high')}
-            className="h-8 rounded-full border border-white/10 bg-black/20 px-3 text-xs font-medium text-zinc-200 hover:bg-surface-200 focus:outline-none focus:ring-2 focus:ring-brand/50"
+            className="rounded border border-[var(--line)] bg-transparent px-2 py-1 text-xs text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] focus:outline-none focus:border-[var(--line-3)]"
           >
-            <option value="low">{t('chat.reasoningEffortLow')}</option>
-            <option value="medium">{t('chat.reasoningEffortMedium')}</option>
-            <option value="high">{t('chat.reasoningEffortHigh')}</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
           </select>
         </div>
       </div>
@@ -2894,9 +2909,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         onKeyDown={handleKeyDown}
         placeholder={t('chat.messageAssistant')}
         rows={1}
-        className="w-full max-h-[200px] min-h-[64px] resize-none bg-transparent px-4 pb-14 pt-3 text-sm leading-6 text-zinc-100 outline-none placeholder:text-zinc-500 sm:min-h-[72px] sm:px-4 sm:pt-3.5"
+        className="w-full max-h-[160px] min-h-[32px] resize-none bg-transparent px-3 py-2 text-base leading-6 text-[var(--fg-0)] outline-none placeholder:text-[var(--fg-3)] sm:min-h-[32px] sm:px-3 sm:py-2"
       />
-      <div className="absolute bottom-2 right-2 flex items-center gap-1.5 sm:gap-2">
+      <div className="absolute bottom-2 right-2 flex items-center gap-1">
         <input
           ref={fileInputRef}
           type="file"
@@ -2906,7 +2921,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         <button
           onClick={triggerFileInput}
           disabled={uploading || isProcessing}
-          className="flex size-9 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-surface-200 hover:text-zinc-200 disabled:opacity-50"
+          className="flex size-8 items-center justify-center rounded-lg text-[var(--fg-3)] transition-colors hover:bg-[rgba(255,255,255,.04)] hover:text-[var(--fg-1)] disabled:opacity-50"
           aria-label={t('common.attachFile')}
           title={uploading ? t('common.processing') : t('common.attachFile')}
         >
@@ -2918,7 +2933,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           <button
             onClick={stopAgent}
             disabled={isStopping}
-            className="flex size-9 items-center justify-center rounded-xl bg-red-500 text-white transition-all hover:bg-red-600 disabled:opacity-60"
+            className="flex size-8 items-center justify-center rounded-lg bg-rose text-white transition-colors hover:bg-rose/80 disabled:opacity-60"
             aria-label="Stop"
           >
             <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2930,7 +2945,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           <button
             onClick={sendMessage}
             disabled={!input.trim() || isProcessing}
-            className="flex size-9 items-center justify-center rounded-xl bg-brand text-white shadow-md shadow-brand/20 transition-all hover:scale-105 hover:bg-brand-dark disabled:opacity-50 disabled:hover:scale-100"
+            className="flex size-8 items-center justify-center rounded-lg bg-[var(--accent)] text-[var(--accent-ink)] transition-colors hover:opacity-80 disabled:opacity-50"
             aria-label="Send message"
           >
             <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2947,7 +2962,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       <div
         ref={setScrollContainerRef}
         onScroll={handleScroll}
-        className="relative flex flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-8 md:pb-8 md:pt-8"
+        className="relative flex flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-6 md:pb-4 md:pt-5"
         style={{ scrollPaddingTop: '2rem', scrollPaddingBottom: '6rem' }}
       >
         {isEmptyState ? (
@@ -2967,9 +2982,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           </div>
         ) : (
           <>
-            {/* Spacer pushes short content to the bottom (just above the composer); collapses to 0 when content overflows. */}
-            <div className="flex-1" />
-            <div ref={setScrollContentRef} className="space-y-4 max-w-3xl mx-auto w-full">
+            <div ref={setScrollContentRef} className="max-w-3xl mx-auto w-full">
               {renderedMessages}
             </div>
             <div ref={messagesEndRef} />
@@ -2991,28 +3004,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         </svg>
       </button>
 
-      <div className="safe-bottom bg-gradient-to-t from-[#141415] via-[#141415] to-transparent px-3 pb-4 pt-3 sm:px-4 sm:pb-5 md:px-8 md:pb-6">
+      <div className="px-2 pb-2 sm:px-3 sm:pb-3 md:px-5 md:pb-4">
         <div className="max-w-3xl mx-auto">
-          {showStats && (
-            <div className="mb-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-zinc-500">
-              {stats.tokensPerSec > 0 && (
-                <span className="flex items-center gap-1">
-                  <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  <span className="text-zinc-300">{stats.tokensPerSec}</span> tok/s
-                </span>
-              )}
-              {stats.contextSize > 0 && (
-                <span className="flex items-center gap-1">
-                  <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
-                  </svg>
-                  <span className="text-zinc-300">{stats.contextSize}</span> tokens
-                </span>
-              )}
-            </div>
-          )}
           {pendingApproval && (
             <div className="mb-3 rounded-2xl border border-amber-500/25 bg-[linear-gradient(180deg,rgba(245,158,11,0.14),rgba(245,158,11,0.06))] p-4 shadow-lg shadow-amber-900/10">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3066,14 +3059,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                 <button
                   type="button"
                   onClick={() => respondToApproval(false)}
-                  className="rounded-lg border border-white/10 bg-surface-200 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-surface-300"
+                  className="rounded-lg border border-white/10 bg-[var(--bg-2)] px-3 py-2 text-xs font-medium text-[var(--fg-2)] transition-colors hover:bg-[var(--bg-3)]"
                 >
                   {t('common.deny')}
                 </button>
                 <button
                   type="button"
                   onClick={() => respondToApproval(true)}
-                  className="rounded-lg bg-brand px-3 py-2 text-xs font-semibold text-white shadow shadow-brand/20 transition-colors hover:bg-brand-dark"
+                  className="rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--accent-ink)] transition-colors hover:opacity-80"
                 >
                   {t('common.approve')}
                 </button>
@@ -3081,7 +3074,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   <button
                     type="button"
                     onClick={() => respondToApproval(true, true)}
-                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-medium text-zinc-200 transition-colors hover:bg-surface-200"
+                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-medium text-[var(--fg-2)] transition-colors hover:bg-[var(--bg-2)]"
                   >
                     {t('chat.alwaysApprove')}
                   </button>
@@ -3090,7 +3083,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </div>
           )}
           {!isEmptyState && renderComposer()}
-          <div className="mt-2 px-2 text-center text-[11px] font-medium text-zinc-500 sm:mt-3 sm:text-xs">
+          <div className="mt-2 px-2 text-center text-[11px] font-medium text-[var(--fg-3)] sm:mt-3 sm:text-xs">
             {t('chat.aiDisclaimer')}
           </div>
         </div>

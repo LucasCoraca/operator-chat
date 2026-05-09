@@ -63,17 +63,17 @@ export function PersonalityManager({
   return (
     <>
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-3 sm:p-4">
-        <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/10 bg-[#1e1e20] shadow-2xl">
+        <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[var(--radius)] hairline bg-[var(--bg-elev)] shadow-2">
           <div className="p-4 sm:p-6">
             <div className="mb-5 flex items-start justify-between gap-4 sm:mb-6">
               <div>
-                <h2 className="text-2xl font-semibold text-zinc-100">{t('personality.managePersonalities')}</h2>
-                <p className="mt-1 text-sm text-zinc-500">{t('personality.manageDescription')}</p>
+                <h2 className="section-title text-[var(--fg-0)]">{t('personality.managePersonalities')}</h2>
+                <p className="mt-1 text-sm text-[var(--fg-3)]">{t('personality.manageDescription')}</p>
               </div>
               <button
                 type="button"
                 onClick={onClose}
-                className="rounded-xl p-2 text-zinc-500 transition-colors hover:bg-white/5 hover:text-zinc-200"
+                className="rounded-[var(--radius)] p-2 text-[var(--fg-3)] transition-colors hover:bg-[rgba(255,255,255,.03)] hover:text-[var(--fg-0)]"
                 aria-label="Close"
               >
                 <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -85,7 +85,7 @@ export function PersonalityManager({
             {/* Create Button */}
             <button
               onClick={handleCreate}
-              className="mb-4 flex items-center gap-2 px-4 py-2 bg-brand hover:bg-brand-dark rounded-lg text-white transition-colors shadow-md shadow-brand/20"
+              className="mb-4 flex items-center gap-2 px-4 py-2 bg-[var(--accent)] hover:bg-[var(--accent)]/80 rounded-[var(--radius-sm)] text-[var(--accent-ink)] transition-colors shadow-1"
             >
               <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -95,12 +95,12 @@ export function PersonalityManager({
 
             {/* Personalities List */}
             {customPersonalities.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-white/20 bg-[#27272a] p-8 text-center">
-                <svg className="mx-auto size-12 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="rounded-[var(--radius-sm)] border border-dashed hairline-strong bg-[var(--bg-elev)] p-8 text-center">
+                <svg className="mx-auto size-12 text-[var(--fg-0)]/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
-                <h3 className="mt-4 text-lg font-medium text-zinc-300">{t('personality.noCustomPersonalities')}</h3>
-                <p className="mt-1 text-sm text-zinc-500">
+                <h3 className="mt-4 text-lg font-medium text-[var(--fg-1)]">{t('personality.noCustomPersonalities')}</h3>
+                <p className="mt-1 text-sm text-[var(--fg-3)]">
                   {t('personality.noCustomPersonalitiesDescription')}
                 </p>
               </div>
@@ -109,22 +109,22 @@ export function PersonalityManager({
                 {customPersonalities.map((personality) => (
                   <div
                     key={personality.id}
-                    className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-[#27272a] p-4"
+                    className="flex items-center justify-between gap-4 rounded-[var(--radius-sm)] hairline bg-[var(--bg-elev)] p-4"
                   >
                     <div className="flex items-start gap-3 flex-1 min-w-0">
-                      <svg className="size-5 text-brand flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="size-5 text-[var(--accent)] flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
                       </svg>
                       <div className="min-w-0">
-                        <h4 className="font-medium text-zinc-100 truncate">{personality.name}</h4>
-                        <p className="text-sm text-zinc-500 truncate">{personality.description}</p>
-                        <p className="text-xs text-zinc-600 mt-1">Style: {personality.tone}</p>
+                        <h4 className="font-medium text-[var(--fg-0)] truncate">{personality.name}</h4>
+                        <p className="text-sm text-[var(--fg-3)] truncate">{personality.description}</p>
+                        <p className="text-xs text-[var(--fg-0)]/40 mt-1">Style: {personality.tone}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
                       <button
                         onClick={() => handleEdit(personality)}
-                        className="p-2 text-zinc-500 hover:text-zinc-200 hover:bg-white/5 rounded-lg transition-colors"
+                        className="p-2 text-[var(--fg-3)] hover:text-[var(--fg-0)] hover:bg-[rgba(255,255,255,.03)] rounded-[var(--radius-sm)] transition-colors"
                         title="Edit"
                       >
                         <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -133,7 +133,7 @@ export function PersonalityManager({
                       </button>
                       <button
                         onClick={() => handleDelete(personality.id)}
-                        className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
+                        className="p-2 text-[var(--fg-3)] hover:text-rose hover:bg-rose-soft rounded-[var(--radius-sm)] transition-colors"
                         title="Delete"
                       >
                         <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -147,14 +147,14 @@ export function PersonalityManager({
             )}
 
             {/* Info */}
-            <div className="mt-6 rounded-lg border border-white/10 bg-[#27272a] p-4">
-              <h4 className="text-sm font-medium text-zinc-300 mb-2">{t('personality.builtInPersonalities')}</h4>
-              <p className="text-sm text-zinc-500">
+            <div className="mt-6 rounded-[var(--radius-sm)] hairline bg-[var(--bg-elev)] p-4">
+              <h4 className="text-sm font-medium text-[var(--fg-1)] mb-2">{t('personality.builtInPersonalities')}</h4>
+              <p className="text-sm text-[var(--fg-3)]">
                 {t('personality.builtInDescription')}
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 {['Professional', 'Bubbly', 'Military', 'Intelligence Analyst', 'Creative Writer', 'Minimalist', 'Mentor', 'DevOps Engineer'].map((name) => (
-                  <span key={name} className="px-2 py-1 text-xs rounded-md bg-[#1e1e20] text-zinc-400 border border-white/10">
+                  <span key={name} className="px-2 py-1 text-xs rounded-[var(--radius-sm)] bg-[var(--bg-elev)] text-[var(--fg-2)] hairline">
                     {name}
                   </span>
                 ))}
