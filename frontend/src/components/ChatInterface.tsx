@@ -2613,7 +2613,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       <div
         key={msg.id || idx}
         ref={(el) => messageRefs.current.set(idx, el)}
-        className={`mx-auto flex max-w-3xl gap-3 transition-colors sm:gap-4 ${isHighlighted ? 'bg-brand/10 -mx-2 rounded-2xl px-2 py-2 ring-1 ring-brand/20 sm:-mx-4 sm:px-4' : ''} ${isFirstMessage ? 'pt-8' : ''}`}
+        className={`mx-auto flex max-w-3xl min-w-0 gap-3 transition-colors sm:gap-4 ${isHighlighted ? 'bg-brand/10 -mx-2 rounded-2xl px-2 py-2 ring-1 ring-brand/20 sm:-mx-4 sm:px-4' : ''} ${isFirstMessage ? 'pt-8' : ''}`}
         style={isFirstMessage ? { paddingTop: '1rem', marginTop: '20px' } : {}}
       >
         <div className="flex-1 min-w-0 space-y-4 text-zinc-300 text-sm leading-relaxed mt-1">
@@ -2965,11 +2965,11 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   );
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col min-w-0">
       <div
         ref={setScrollContainerRef}
         onScroll={handleScroll}
-        className="relative flex flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-6 md:pb-4 md:pt-5 safe-bottom"
+        className="relative flex min-w-0 flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-6 md:pb-4 md:pt-5 safe-bottom"
         style={{ scrollPaddingTop: '2rem', scrollPaddingBottom: '6rem' }}
       >
         {isEmptyState ? (
