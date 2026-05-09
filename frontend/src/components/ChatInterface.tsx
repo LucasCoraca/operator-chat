@@ -260,7 +260,7 @@ function TerminalOutput({ normalized, type }: { normalized: string; type?: Agent
     };
 
     return (
-      <div className="mt-2 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5">
+      <div className="mt-2 min-w-0 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5">
         {!isExpanded && isLongOutput && (
           <div className="mb-2 whitespace-pre-wrap break-words text-zinc-500">
             {previewLabel}
@@ -269,7 +269,7 @@ function TerminalOutput({ normalized, type }: { normalized: string; type?: Agent
         {visible.map((line, index) => (
           <div
             key={`${index}-${line}`}
-            className={`-mx-1 border-l-2 px-1 whitespace-pre-wrap break-words ${getDiffLineClass(line)}`}
+            className={`min-w-0 -mx-1 border-l-2 px-1 whitespace-pre-wrap break-words ${getDiffLineClass(line)}`}
           >
             {line || ' '}
           </div>
@@ -288,13 +288,13 @@ function TerminalOutput({ normalized, type }: { normalized: string; type?: Agent
   }
 
   return (
-    <div className="mt-2 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
+    <div className="mt-2 min-w-0 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
       {!isExpanded && isLongOutput && (
         <div className="mb-2 whitespace-pre-wrap break-words text-zinc-500">
           {previewLabel}
         </div>
       )}
-      <pre className="whitespace-pre-wrap break-words">{visible.join('\n')}</pre>
+      <pre className="min-w-0 whitespace-pre-wrap break-words">{visible.join('\n')}</pre>
       {isLongOutput && (
         <button
           type="button"
@@ -319,7 +319,7 @@ function AgentTaskPreview({ prompt }: { prompt: string }) {
 
   return (
     <div className="mt-1">
-      <div className="prose prose-invert max-w-none break-words text-sm leading-6 text-zinc-300 prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-zinc-100 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-code:text-emerald-200">
+      <div className="prose prose-invert max-w-none break-words min-w-0 text-sm leading-6 text-zinc-300 prose-headings:mb-2 prose-headings:mt-3 prose-headings:text-zinc-100 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0 prose-code:text-emerald-200">
         <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
           {visible}
         </ReactMarkdown>
@@ -430,7 +430,7 @@ function ScreenshotSequence({ frames }: { frames: ScreenshotFrame[] }) {
 function BrowserToolOutput({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="mt-2">
+    <div className="mt-2 min-w-0">
       <button
         type="button"
         onClick={(event) => {
@@ -444,7 +444,7 @@ function BrowserToolOutput({ text }: { text: string }) {
       </button>
       {expanded && (
         <div className="mt-2 rounded-lg border border-white/5 bg-black/30 p-3 font-mono text-[12px] leading-5 text-zinc-300">
-          <pre className="whitespace-pre-wrap break-words">{text}</pre>
+          <pre className="min-w-0 whitespace-pre-wrap break-words">{text}</pre>
         </div>
       )}
     </div>
@@ -2227,7 +2227,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     // the text, so it reads as inline reasoning between commands.
     if (entry.type === 'thought') {
       return (
-        <div key={entry.id} className="group border-b border-white/5 px-4 py-3 last:border-b-0">
+   <div key={entry.id} className="group min-w-0 border-b border-white/5 px-4 py-3 last:border-b-0">
           <div className="flex items-start gap-2">
             <div className="flex-1 text-sm leading-6 text-zinc-300 whitespace-pre-wrap">
               {entry.output || entry.title}
@@ -2265,7 +2265,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           {rewindButton}
         </div>
         {visibleArgs.length > 0 && (
-          <div className="mt-2 rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 font-mono text-[11px] leading-5 text-zinc-500">
+          <div className="mt-2 min-w-0 break-words rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2 font-mono text-[11px] leading-5 text-zinc-500">
             {visibleArgs
               .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
               .join('\n')}
@@ -2315,7 +2315,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     const commandCount = terminalEntries.filter((entry) => entry.type === 'command').length;
 
     return (
-      <div className="max-w-4xl mx-auto overflow-hidden rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30">
+      <div className="max-w-4xl mx-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-[#111113] px-4 py-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-zinc-100">{run.title}</div>
@@ -2550,7 +2550,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
 
     return (
-      <div key={`reasoning-${idx}`} className="max-w-3xl mx-auto space-y-2 mt-2 mb-2">
+      <div key={`reasoning-${idx}`} className="mx-auto space-y-2 mt-2 mb-2">
         <div className="min-w-0 max-w-full break-words space-y-2 overflow-hidden rounded-xl border border-white/5 bg-surface-100/50 p-3 sm:max-w-full sm:p-4">
           {stepsToDisplay.map((step, stepIdx) => renderAgentStep(step, stepIdx))}
           {isProcessingMsg && streamingThoughtContent && currentStepType === 'thought' && (

@@ -279,7 +279,8 @@
 }
 
 .prose pre {
-  @apply bg-transparent p-0 m-0;
+  @apply bg-transparent p-0 m-0 min-w-0;
+  overflow-x: auto;
 }
 
 .prose pre code {
