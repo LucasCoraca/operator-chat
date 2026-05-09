@@ -2696,7 +2696,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                       className="fixed inset-0 z-40"
                       onClick={closeRetryDropdown}
                     />
-                    <div className="absolute bottom-full left-0 mb-2 w-64 bg-[#1e1e20] border border-white/10 rounded-lg shadow-lg z-50 overflow-hidden">
+                    <div className="absolute bottom-full left-0 mb-2 w-64 max-w-[calc(100vw-2rem)] bg-[#1e1e20] border border-white/10 rounded-lg shadow-lg z-50 overflow-hidden">
                       <div className="py-1 max-h-64 overflow-y-auto">
                         <button
                           onClick={() => {
@@ -2760,7 +2760,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
   const renderComposer = (extraClassName = '') => (
     <div className={`input-glow relative rounded-lg border border-[var(--line)] bg-[var(--bg-0)]/80 backdrop-blur-xl transition-all duration-200 ${extraClassName}`}>
-      <div className="flex items-center gap-1.5 px-2 py-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5">
         <div className="relative" ref={toolPickerRef}>
           <button
             type="button"
@@ -2969,7 +2969,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       <div
         ref={setScrollContainerRef}
         onScroll={handleScroll}
-        className="relative flex flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-6 md:pb-4 md:pt-5"
+        className="relative flex flex-1 flex-col overflow-y-auto px-3 pb-4 pt-5 sm:px-4 sm:pt-6 md:px-6 md:pb-4 md:pt-5 safe-bottom"
         style={{ scrollPaddingTop: '2rem', scrollPaddingBottom: '6rem' }}
       >
         {isEmptyState ? (
@@ -3001,7 +3001,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       <button
         ref={jumpButtonRef}
         onClick={jumpToBottom}
-        className="fixed bottom-[16rem] right-3 z-20 flex items-center gap-2 rounded-full bg-brand px-3 py-2 text-white shadow-lg transition-all hover:bg-brand-dark sm:bottom-24 sm:right-4 sm:px-4 md:right-8"
+        className="fixed bottom-24 right-3 z-20 flex items-center gap-2 rounded-full bg-brand px-3 py-2 text-white shadow-lg transition-all hover:bg-brand-dark sm:bottom-24 sm:right-4 sm:px-4 md:right-8"
         style={{ display: 'none' }}
         aria-label="Jump to bottom"
       >

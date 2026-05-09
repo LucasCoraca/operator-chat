@@ -1412,7 +1412,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             onOpenChat={openChatFromTask}
           />
         ) : currentChatId && currentSandboxId ? (
-            <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+            <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
             <div className="flex min-h-0 flex-1 flex-col">
               <ChatInterface 
                 key={currentChatId}
@@ -1432,9 +1432,9 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                   className="fixed inset-0 z-20 bg-black/50 md:hidden"
                   onClick={() => setShowSandbox(false)}
                 />
-                <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[var(--radius-lg)] border-t hairline bg-[var(--bg-1)] shadow-2 md:static md:inset-auto md:w-full md:max-w-[400px] md:flex-shrink-0 md:rounded-none md:border-l md:border-t-0 md:shadow-none">
+                <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[var(--radius-lg)] border-t hairline bg-[var(--bg-1)] shadow-2 lg:static lg:inset-auto lg:w-full lg:max-w-[400px] lg:flex-shrink-0 lg:rounded-none lg:border-l lg:border-t-0 lg:shadow-none">
                   <div className="relative flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg-1)] p-3">
-                    <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-[var(--line-3)] md:hidden" />
+                    <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-[var(--line-3)] lg:hidden" />
                     <h3 className="font-medium text-[var(--fg-0)]">{t('sandbox.title')}</h3>
                     <button
                       onClick={() => setShowSandbox(false)}
@@ -1451,15 +1451,15 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
               </>
             )}
             {showRemoteWorkspace && (
-              <>
-                <div
-                  className="fixed inset-0 z-20 bg-black/50 md:hidden"
-                  onClick={() => setShowRemoteWorkspace(false)}
-                />
-                <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[var(--radius-lg)] border-t hairline bg-[var(--bg-1)] shadow-2 md:static md:inset-auto md:w-full md:max-w-[480px] md:flex-shrink-0 md:rounded-none md:border-l md:border-t-0 md:shadow-none">
-                  <div className="relative flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg-1)] p-3">
-                    <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-[var(--line-3)] md:hidden" />
-                    <h3 className="font-medium text-[var(--fg-0)]">Remote workspace</h3>
+               <>
+                 <div
+                   className="fixed inset-0 z-20 bg-black/50 lg:hidden"
+                   onClick={() => setShowRemoteWorkspace(false)}
+                 />
+                 <div className="fixed inset-x-0 bottom-0 top-24 z-30 flex flex-col rounded-t-[var(--radius-lg)] border-t hairline bg-[var(--bg-1)] shadow-2 lg:static lg:inset-auto lg:w-full lg:max-w-[480px] lg:flex-shrink-0 lg:rounded-none lg:border-l lg:border-t-0 lg:shadow-none">
+                   <div className="relative flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg-1)] p-3">
+                     <div className="absolute left-1/2 top-2 h-1.5 w-12 -translate-x-1/2 rounded-full bg-[var(--line-3)] lg:hidden" />
+                     <h3 className="font-medium text-[var(--fg-0)]">Remote workspace</h3>
                     <button
                       onClick={() => setShowRemoteWorkspace(false)}
                       className="rounded-[var(--radius-sm)] p-2 transition-colors hover:bg-[rgba(255,255,255,.03)]"
