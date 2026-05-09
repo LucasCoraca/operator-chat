@@ -2550,7 +2550,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
 
     return (
-      <div key={`reasoning-${idx}`} className="max-w-3xl mx-auto space-y-2">
+      <div key={`reasoning-${idx}`} className="max-w-3xl mx-auto space-y-2 mt-2 mb-2">
         <div className="max-w-full break-words space-y-2 rounded-xl border border-white/5 bg-surface-100/50 p-3 sm:max-w-full sm:p-4">
           {stepsToDisplay.map((step, stepIdx) => renderAgentStep(step, stepIdx))}
           {isProcessingMsg && streamingThoughtContent && currentStepType === 'thought' && (
