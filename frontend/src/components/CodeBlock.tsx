@@ -1,4 +1,15 @@
 import React, { useState } from 'react';
+import { UIRenderer } from './UIRenderer';
+
+/** Recursively flatten a React node tree to its raw text content. */
+function extractText(node: React.ReactNode): string {
+  if (node == null || node === false || node === true) return '';
+  if (typeof node === 'string') return node;
+  if (typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join('');
+  if (React.isValidElement(node)) return extractText((node.props as { children?: React.ReactNode }).children);
+  return '';
+}
 
 interface CodeBlockProps {
   inline?: boolean;
@@ -117,16 +128,25 @@ export const PreBlock: React.FC<PreBlockProps> = ({ children, node, ...props }) 
   }
 
   const handleCopy = async () => {
-    const text = codeElement 
+    const text = codeElement
       ? String(codeElement.props.children).replace(/\n$/, '')
       : String(children);
-    
+
     const success = await copyToClipboard(text);
     if (success) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
   };
+
+  if (language === 'ui') {
+    // When both `pre` and `code` are overridden, the code element's `.type` is
+    // the CodeBlock function (not the string 'code'), so `codeElement` above is
+    // undefined and `String(children)` would yield "[object Object]". Walk the
+    // node tree to recover the raw OpenUI Lang text reliably.
+    const uiSource = extractText(children).replace(/\n$/, '');
+    return <UIRenderer response={uiSource} />;
+  }
 
   if (!codeElement) {
     return (

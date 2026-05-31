@@ -12,6 +12,7 @@ import 'katex/dist/katex.min.css';
 import { getAuthHeader } from '../services/auth';
 import { generateUUID } from '../utils/uuid';
 import CodeBlock, { PreBlock } from './CodeBlock';
+import { UIStreamingContext } from './UIRenderer';
 import { AgentQuestionDialog, type AgentQuestionPayload } from './AgentQuestionDialog';
 import operatorLogo from '../assets/logo.png';
 
@@ -2654,7 +2655,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                     </div>
                   )}
                   <div className="prose prose-invert max-w-full break-words min-w-0">
-                    <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown>
+                    <UIStreamingContext.Provider value={isProcessing && processingMessageIndex !== null && idx === processingMessageIndex + 1}>
+                      <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{msg.content}</ReactMarkdown>
+                    </UIStreamingContext.Provider>
                   </div>
                   {!assistantModel && !msg.content && processingMessageIndex !== null && idx === processingMessageIndex + 1 && (
                     <div className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
@@ -2752,7 +2755,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         {renderReasoningLog(idx)}
       </React.Fragment>
     ));
-  }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, streamingThoughtContent, 
+  }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, streamingThoughtContent,
       streamingContent, currentStepType, editingMessageIndex, editContent, showRetryDropdown,
       copiedMessageId, highlightedMessage, isProcessing, agentSteeringDrafts]);
 

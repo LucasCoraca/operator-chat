@@ -1,0 +1,45 @@
+/* Make OpenUI cards blend into the chat reply instead of looking like raised
+ * widgets: transparent background and no shadow. Imported after OpenUI's own
+ * stylesheets so these win; !important guards against their specificity. */
+.openui-card-card,
+.openui-card-sunk {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * Mobile responsiveness.
+ *
+ * OpenUI's Stack renders horizontal layouts with an INLINE `flex-direction: row`
+ * style (no class to hook). On a phone, a multi-column row (e.g. a 3-stat
+ * header) doesn't have room, so flex shrinks each child and the text squishes —
+ * wrapping mid-word ("Renovaç / ão"). The model emits one layout for all
+ * viewports and can't author mobile-specific output, so adaptation lives here.
+ *
+ * Strategy, scoped to our renderer (.openui-render-root) so it never leaks into
+ * the rest of the app:
+ *   1. Below 640px, any row Stack with 3+ children stacks vertically. Two-child
+ *      rows (icon+text, label:value) usually fit, so they stay horizontal.
+ *   2. As a safety net, allow all row Stacks to wrap.
+ *   3. Never break words mid-character; only wrap at spaces (break long words
+ *      only when there's truly no room).
+ * --------------------------------------------------------------------------- */
+.openui-render-root {
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
+}
+
+@media (max-width: 640px) {
+  /* A row with 3+ children can't fit on a phone — stack it vertically. */
+  .openui-render-root div[style*="flex-direction: row"]:has(> :nth-child(3)) {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  /* Safety net: let any remaining row wrap instead of squishing its children. */
+  .openui-render-root div[style*="flex-direction: row"] {
+    flex-wrap: wrap !important;
+  }
+}

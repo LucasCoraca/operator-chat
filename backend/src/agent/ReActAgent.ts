@@ -11,6 +11,7 @@ import {
   FileViewAnalysis,
 } from './fileViewCache';
 import { AgentRunTask } from '../repositories/agentRunTaskRepository';
+import { OPENUI_LANG_PROMPT } from './openuiLangPrompt';
 import fs from 'fs';
 import path from 'path';
 
@@ -998,6 +999,41 @@ This is REQUIRED for any factual claims, statistics, news, or information obtain
 
 ` : '';
 
+    const visualizationSection = this.currentMode === 'compose_reply_mode' ? `
+
+## RESPONSE FORMAT — COMPOSE YOUR REPLY AS A UI
+Your replies are rendered in a graphical interface, not a plain text console. **openui-lang is your PRIMARY response format — strongly prefer it over raw text.** Compose your answer AS an interface: a fenced \`\`\`ui code block containing an openui-lang program that lays out your whole response. It renders live, streaming progressively as you write it.
+
+This includes your TEXT. openui-lang has text components, so put your prose INSIDE the UI rather than writing plain markdown:
+- \`MarkDownRenderer(text)\` — multi-paragraph explanations and markdown text.
+- \`TextContent(text, size?)\` — shorter text, headings, labels (sizes: "small" | "default" | "large" | "small-heavy" | "large-heavy").
+- \`Callout\` / \`TextCallout\` — highlight key points, tips, warnings.
+Then structure and enrich with the rest of the catalog: \`Card\`/\`CardHeader\` for sections, \`BarChart\`/\`LineChart\`/\`PieChart\` + \`Table\` for data, \`Steps\` for processes, \`Tabs\`/\`Accordion\` to organize, \`Tag\`/\`TagBlock\` for labels, \`Image\` for visuals.
+
+**Default: wrap essentially every substantive answer in a \`\`\`ui block** — explanations, summaries, comparisons, lists, guides, and data alike. A well-composed UI is clearer and more pleasant than a wall of text. Only answer in plain prose (no \`\`\`ui block) for trivial conversational turns: a one-line reply, an acknowledgment, or a clarifying question. When unsure, use openui-lang.
+
+You may include MULTIPLE \`\`\`ui blocks in one reply with brief connective prose between them, but prefer to keep the main content inside the block(s). Each block is a self-contained openui-lang program with its own \`root = Stack(...)\`. Everything INSIDE a \`\`\`ui fence must be valid openui-lang and nothing else (no markdown, no prose, no JSX).
+
+The complete openui-lang specification follows. Use ONLY the components and exact signatures it defines — do not invent component names or add extra arguments. Follow its syntax, component signatures, and examples precisely.
+
+${OPENUI_LANG_PROMPT}
+
+### Example — an explanatory answer composed entirely as a UI
+A question like "How does caching speed up my app?" should be answered as an interface, not prose:
+
+\`\`\`ui
+root = Stack([header, intro, benefits, chart])
+header = CardHeader("How Caching Speeds Up Your App", "Trade memory for latency")
+intro = MarkDownRenderer("Caching stores the results of expensive operations so repeat requests are served from fast memory instead of recomputing or refetching them.")
+benefits = Stack([b1, b2, b3], "row")
+b1 = TextCallout("success", "Lower latency", "Cached reads avoid slow disk or network round-trips.")
+b2 = TextCallout("info", "Less load", "Fewer hits reach your database or upstream APIs.")
+b3 = TextCallout("neutral", "Better scale", "The same hardware serves more concurrent users.")
+chart = BarChart(["No cache", "Cold cache", "Warm cache"], [latency])
+latency = Series("Latency (ms)", [240, 180, 12])
+\`\`\`
+` : '';
+
     return `Knowledge Cutoff: December 2023
 
 ${this.getLanguageInstruction()}
@@ -1010,7 +1046,7 @@ ${workspaceSection}${personalitySection}
 - Use only structured tool calls for tools.
 - Do not assume that normal assistant text is safe to emit unless the mode instructions below explicitly allow it.
 - call tools instead of describing tool usage in prose.
-${modeSection}${composeSection}
+${modeSection}${composeSection}${visualizationSection}
 
 Be helpful, thorough, and use tools effectively when needed.`;
   }
