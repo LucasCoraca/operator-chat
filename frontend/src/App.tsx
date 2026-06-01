@@ -246,6 +246,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [landingTools, setLandingTools] = useState<Tool[]>([]);
   const [landingToolPreferences, setLandingToolPreferences] = useState<Record<string, ToolPreference>>({});
   const [showLandingToolPicker, setShowLandingToolPicker] = useState(false);
+  const [landingToolSearch, setLandingToolSearch] = useState('');
   const [landingReasoningEffort, setLandingReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
   const [personalities, setPersonalities] = useState<ChatPersonality[]>([]);
   const [customPersonalities, setCustomPersonalities] = useState<ChatPersonality[]>([]);
@@ -1535,7 +1536,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                     <div className="relative" ref={landingToolPickerRef}>
                       <button
                         type="button"
-                        onClick={() => setShowLandingToolPicker((prev) => !prev)}
+                        onClick={() => { setLandingToolSearch(''); setShowLandingToolPicker((prev) => !prev); }}
                         className="inline-flex h-8 items-center gap-2 rounded-pill hairline bg-[rgba(255,255,255,.04)] px-3 text-xs font-medium text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.06)] transition-colors"
                       >
                         <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1546,7 +1547,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                       </button>
 
                       {showLandingToolPicker && (
-                        <div className="absolute bottom-full left-0 z-30 mb-2 w-[26rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-[var(--radius-lg)] hairline bg-[var(--bg-elev)] shadow-2">
+                        <div className="absolute bottom-full left-0 z-30 mb-2 w-[calc(100vw-1.5rem)] max-w-[calc(100vw-1.5rem)] sm:w-[48rem] sm:max-w-[calc(100vw-2rem)] overflow-hidden rounded-[var(--radius-lg)] hairline bg-[var(--bg-elev)] shadow-2">
                           <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3">
                             <div>
                               <div className="text-sm font-medium text-[var(--fg-0)]">{t('chat.enabledTools')}</div>
@@ -1557,8 +1558,24 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                               <button type="button" onClick={disableAllLandingTools} className="text-[var(--fg-1)] hover:text-[var(--fg-0)]">{t('common.none')}</button>
                             </div>
                           </div>
-                          <div className="max-h-80 overflow-y-auto p-2.5">
-                            {landingTools.map((tool) => {
+                          <div className="border-b border-[var(--line)] p-1.5">
+                            <input
+                              type="text"
+                              value={landingToolSearch}
+                              onChange={(e) => setLandingToolSearch(e.target.value)}
+                              placeholder={t('chat.searchTools')}
+                              className="w-full rounded-[var(--radius-sm)] bg-[rgba(255,255,255,.04)] px-3 py-2 text-sm text-[var(--fg-0)] placeholder:text-[var(--fg-3)] outline-none focus:bg-[rgba(255,255,255,.06)]"
+                            />
+                          </div>
+                          <div className="max-h-[40vh] overflow-y-auto overflow-x-hidden p-2.5">
+                            <div className="columns-1 sm:columns-2 gap-2.5">
+                            {landingTools
+                              .filter((tool) => {
+                                const q = landingToolSearch.trim().toLowerCase();
+                                if (!q) return true;
+                                return tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q);
+                              })
+                              .map((tool) => {
                               const preference = landingToolPreferences[tool.name] ?? {
                                 enabled: true,
                                 autoApprove: !tool.policy.requiresApproval,
@@ -1570,7 +1587,7 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                                     ? 'border-[var(--amber-line)] bg-[var(--amber-soft)] text-[var(--amber)]'
                                     : 'border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)]';
                               return (
-                                <div key={tool.name} className="rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.02)] p-3 transition-colors hover:bg-[rgba(255,255,255,.04)]">
+                                <div key={tool.name} className="mb-2.5 break-inside-avoid rounded-[var(--radius)] hairline bg-[rgba(255,255,255,.02)] p-3 transition-colors hover:bg-[rgba(255,255,255,.04)]">
                                   <label className="flex cursor-pointer items-start gap-3">
                                     <input
                                       type="checkbox"
@@ -1618,6 +1635,15 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                                 </div>
                               );
                             })}
+                            </div>
+                            {landingTools.length > 0 &&
+                              landingToolSearch.trim() &&
+                              !landingTools.some((tool) => {
+                                const q = landingToolSearch.trim().toLowerCase();
+                                return tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q);
+                              }) && (
+                                <div className="px-3 py-1.5 text-sm text-[var(--fg-3)]">{t('chat.noToolsMatch')}</div>
+                              )}
                           </div>
                         </div>
                       )}

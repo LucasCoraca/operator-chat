@@ -17,6 +17,36 @@ import { UISendToAssistantContext } from '../openui/uiActionContext';
 import { AgentQuestionDialog, type AgentQuestionPayload } from './AgentQuestionDialog';
 import operatorLogo from '../assets/logo.png';
 
+// Animates its children from height 0 to their natural height on mount using
+// the Web Animations API (precise onfinish callback). Calls onOpened only once
+// the animation has fully completed, so scrolling waits for the reveal to end.
+const CollapsibleReveal: React.FC<{ children: React.ReactNode; onOpened?: () => void }> = ({ children, onOpened }) => {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const target = el.scrollHeight;
+    const anim = el.animate(
+      [{ height: '0px' }, { height: `${target}px` }],
+      { duration: 300, easing: 'ease-out' }
+    );
+    anim.onfinish = () => {
+      // Effect removed after finish (fill: none) → element settles to its
+      // natural auto height. Scroll only now, when layout is final.
+      requestAnimationFrame(() => onOpened?.());
+    };
+    return () => anim.cancel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <div ref={ref} style={{ overflow: 'hidden' }}>
+      {children}
+    </div>
+  );
+};
+
 interface AgentStep {
   type: 'thought' | 'action' | 'observation' | 'tool_progress' | 'mode_transition' | 'final_answer';
   content: string;
@@ -495,6 +525,12 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [tokenCount, setTokenCount] = useState(0);
   const [serverTimings, setServerTimings] = useState<ChatTimings | null>(null);
   const [expandedThoughts, setExpandedThoughts] = useState<Set<number>>(new Set());
+  const [expandedAgentRuns, setExpandedAgentRuns] = useState<Set<string>>(new Set());
+  const reasoningCardRefs = useRef<Map<number, HTMLDivElement | null>>(new Map());
+  const agentCardRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const programmaticScrollRef = useRef(false);
+  const scrollRafRef = useRef<number | null>(null);
+  const revealObserverRef = useRef<ResizeObserver | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingMessageIndex, setProcessingMessageIndex] = useState<number | null>(null);
   const [streamingThoughtContent, setStreamingThoughtContent] = useState('');
@@ -1278,6 +1314,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const stickToBottomNow = useCallback(() => {
     const c = scrollContainerRef.current;
     if (!c) return;
+    if (programmaticScrollRef.current) return;
     if (!stickToBottomRef.current) return;
     c.scrollTop = c.scrollHeight;
     if (jumpButtonRef.current) jumpButtonRef.current.style.display = 'none';
@@ -1686,13 +1723,104 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
   };
 
+  // rAF-driven smooth scroll of the chat container. Unlike native
+  // scrollTo({behavior:'smooth'}) this can't be interrupted by the
+  // stick-to-bottom ResizeObserver (which we also gate via programmaticScrollRef).
+  const smoothScrollContainerTo = (top: number, duration = 420) => {
+    const c = scrollContainerRef.current;
+    if (!c) return;
+    if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+    const start = c.scrollTop;
+    const end = Math.max(0, Math.min(top, c.scrollHeight - c.clientHeight));
+    if (Math.abs(end - start) < 1) {
+      scrollRafRef.current = null;
+      programmaticScrollRef.current = false;
+      return;
+    }
+    const startTime = performance.now();
+    programmaticScrollRef.current = true;
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
+      c.scrollTop = start + (end - start) * ease;
+      if (t < 1) {
+        scrollRafRef.current = requestAnimationFrame(step);
+      } else {
+        scrollRafRef.current = null;
+        programmaticScrollRef.current = false;
+      }
+    };
+    scrollRafRef.current = requestAnimationFrame(step);
+  };
+
+  // Scroll an element so its top or bottom edge sits just inside the viewport.
+  const scrollElementEdgeIntoView = (el: HTMLElement | null | undefined, align: 'top' | 'bottom') => {
+    const container = scrollContainerRef.current;
+    if (!container || !el) return;
+    const cRect = container.getBoundingClientRect();
+    const eRect = el.getBoundingClientRect();
+    const margin = 16;
+    const delta = align === 'bottom'
+      ? eRect.bottom - cRect.bottom + margin
+      : eRect.top - cRect.top - margin;
+    smoothScrollContainerTo(container.scrollTop + delta);
+  };
+
+  // After expanding, scroll to the element's bottom and keep re-pinning it for a
+  // short window so late-loading content (screenshots, long output) that grows
+  // it doesn't leave the collapse control below the fold.
+  const revealScrollToBottom = (el: HTMLElement | null | undefined) => {
+    if (!el) return;
+    scrollElementEdgeIntoView(el, 'bottom');
+    if (typeof ResizeObserver === 'undefined') return;
+    revealObserverRef.current?.disconnect();
+    const observer = new ResizeObserver(() => scrollElementEdgeIntoView(el, 'bottom'));
+    observer.observe(el);
+    revealObserverRef.current = observer;
+    window.setTimeout(() => {
+      if (revealObserverRef.current === observer) {
+        observer.disconnect();
+        revealObserverRef.current = null;
+      }
+    }, 1500);
+  };
+
+  const toggleAgentRunTrace = (runId: string) => {
+    const expanding = !expandedAgentRuns.has(runId);
+    setExpandedAgentRuns((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) next.delete(runId);
+      else next.add(runId);
+      return next;
+    });
+    if (expanding) {
+      stickToBottomRef.current = false;
+    } else {
+      revealObserverRef.current?.disconnect();
+      revealObserverRef.current = null;
+      requestAnimationFrame(() => scrollElementEdgeIntoView(agentCardRefs.current.get(runId), 'top'));
+    }
+  };
+
   const toggleThoughts = (idx: number) => {
+    const expanding = !expandedThoughts.has(idx);
     setExpandedThoughts((prev) => {
       const newSet = new Set(prev);
       if (newSet.has(idx)) newSet.delete(idx);
       else newSet.add(idx);
       return newSet;
     });
+    if (expanding) {
+      // Prevent the stick-to-bottom ResizeObserver from yanking the scroll
+      // position while the card grows; the scroll-to-bottom happens once the
+      // reveal animation finishes (CollapsibleReveal.onOpened).
+      stickToBottomRef.current = false;
+    } else {
+      // Collapsing: stop any in-flight reveal re-pinning, then scroll back up.
+      revealObserverRef.current?.disconnect();
+      revealObserverRef.current = null;
+      requestAnimationFrame(() => scrollElementEdgeIntoView(reasoningCardRefs.current.get(idx), 'top'));
+    }
   };
 
   const formatToolLabel = (value: string) =>
@@ -2358,7 +2486,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     const commandCount = terminalEntries.filter((entry) => entry.type === 'command').length;
 
     return (
-      <div className="max-w-4xl mx-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30">
+      <div ref={(el) => agentCardRefs.current.set(run.id, el)} className="max-w-4xl mx-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-[#111113] px-4 py-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-zinc-100">{run.title}</div>
@@ -2381,9 +2509,58 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             <div className="px-4 py-5 font-mono text-sm text-zinc-500">
               Waiting for the agent to start...
             </div>
-          ) : (
-            terminalEntries.map((entry) => renderTerminalEntry(entry, run.id))
-          )}
+          ) : (() => {
+            const COLLAPSE_THRESHOLD = 3;
+            const collapsible = terminalEntries.length > COLLAPSE_THRESHOLD;
+            const expanded = !collapsible || expandedAgentRuns.has(run.id);
+            const lastEntry = terminalEntries[terminalEntries.length - 1];
+            return (
+              <>
+                {collapsible && (
+                  <button
+                    type="button"
+                    onClick={() => toggleAgentRunTrace(run.id)}
+                    className="flex w-full items-center gap-2 border-b border-white/5 px-4 py-2.5 text-left font-mono text-xs text-zinc-400 transition-colors hover:bg-white/[0.02] hover:text-zinc-200"
+                  >
+                    <svg className={`size-3.5 shrink-0 transition-transform ${expanded ? '' : '-rotate-90'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                    <span>
+                      {expanded
+                        ? t('chat.agentTraceCollapse')
+                        : t('chat.agentTraceExpand', { commands: commandCount, events: terminalEntries.length })}
+                    </span>
+                  </button>
+                )}
+                {expanded ? (
+                  collapsible ? (
+                    <CollapsibleReveal onOpened={() => revealScrollToBottom(agentCardRefs.current.get(run.id))}>
+                      {terminalEntries.map((entry) => renderTerminalEntry(entry, run.id))}
+                      <button
+                        type="button"
+                        onClick={() => toggleAgentRunTrace(run.id)}
+                        className="flex w-full items-center gap-2 border-t border-white/5 px-4 py-2.5 text-left font-mono text-xs text-zinc-400 transition-colors hover:bg-white/[0.02] hover:text-zinc-200"
+                      >
+                        <svg className="size-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                        </svg>
+                        <span>{t('chat.agentTraceCollapse')}</span>
+                      </button>
+                    </CollapsibleReveal>
+                  ) : (
+                    terminalEntries.map((entry) => renderTerminalEntry(entry, run.id))
+                  )
+                ) : (
+                  <>
+                    <div className="px-4 py-2 font-mono text-[11px] text-zinc-600">
+                      {t('chat.agentTraceHidden', { count: terminalEntries.length - 1 })}
+                    </div>
+                    {renderTerminalEntry(lastEntry, run.id)}
+                  </>
+                )}
+              </>
+            );
+          })()}
           {run.status === 'running' && (
             <div className="flex items-center gap-2 px-4 py-3 font-mono text-sm text-emerald-300">
               <span className="text-zinc-500">$</span>
@@ -2561,7 +2738,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
 
     if (!thoughtsExpanded) {
       return (
-        <div key={`reasoning-${idx}`} className="max-w-3xl mx-auto">
+        <div key={`reasoning-${idx}`} ref={(el) => reasoningCardRefs.current.set(idx, el)} className="max-w-3xl mx-auto">
           <div className="mt-2 mb-2 bg-surface-100/50 rounded-xl p-3 border border-white/5 max-w-full">
             <div className="space-y-2">
               <div className="flex items-center gap-1.5 text-zinc-400">
@@ -2592,7 +2769,8 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
 
     return (
-      <div key={`reasoning-${idx}`} className="mx-auto space-y-2 mt-2 mb-2">
+      <div key={`reasoning-${idx}`} ref={(el) => reasoningCardRefs.current.set(idx, el)} className="mx-auto space-y-2 mt-2 mb-2">
+        <CollapsibleReveal onOpened={() => revealScrollToBottom(reasoningCardRefs.current.get(idx))}>
         <div className="min-w-0 max-w-full break-words space-y-2 overflow-hidden rounded-xl border border-white/5 bg-surface-100/50 p-3 sm:max-w-full sm:p-4">
           {stepsToDisplay.map((step, stepIdx) => renderAgentStep(step, stepIdx))}
           {isProcessingMsg && streamingThoughtContent && currentStepType === 'thought' && (
@@ -2623,6 +2801,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             {t('chat.hideSteps')}
           </button>
         </div>
+        </CollapsibleReveal>
       </div>
     );
   };
@@ -2796,7 +2975,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         {renderReasoningLog(idx)}
       </React.Fragment>
     ));
-  }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, streamingThoughtContent,
+  }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, expandedAgentRuns, streamingThoughtContent,
       streamingContent, currentStepType, editingMessageIndex, editContent, showRetryDropdown,
       copiedMessageId, highlightedMessage, isProcessing, agentSteeringDrafts]);
 
