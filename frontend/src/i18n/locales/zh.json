@@ -60,6 +60,8 @@
     "operatorChat": "Operator Chat",
     "tools": "工具",
     "noTools": "无工具",
+    "searchTools": "搜索工具...",
+    "noToolsMatch": "没有匹配的工具",
     "allTools": "所有工具",
     "enabledTools": "已启用工具",
     "toolsDescription": "这些将应用于下一条消息。",

@@ -60,6 +60,8 @@
     "operatorChat": "Operator Chat",
     "tools": "도구",
     "noTools": "도구 없음",
+    "searchTools": "도구 검색...",
+    "noToolsMatch": "검색과 일치하는 도구가 없습니다",
     "allTools": "모든 도구",
     "enabledTools": "활성화된 도구",
     "toolsDescription": "다음 메시지에 적용됩니다.",

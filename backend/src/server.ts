@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { LlamaClient, LlamaConfig, ChatTimings } from './services/llamaClient';
 import { SearXNGClient, SearXNGConfig } from './services/searxngClient';
+import { fetchSafeImage } from './services/imageProxy';
 import { SandboxManager } from './services/sandboxManager';
 import { MemoryManager } from './services/memoryManager';
 import { MCPClientManager, MCPServerConfig } from './services/mcpClientManager';
@@ -126,6 +127,7 @@ interface RemoteWorkspaceSettings {
 const defaultSettings = {
   llama: {
     baseUrl: process.env.LLAMA_BASE_URL || 'http://localhost:8080',
+    apiKey: process.env.LLAMA_API_KEY || undefined,
   },
   searxng: {
     baseUrl: process.env.SEARXNG_BASE_URL || 'http://localhost:8080',
@@ -3648,6 +3650,41 @@ app.get('/api/agent-attachments/:filename', (req, res) => {
     if (err) return res.status(404).json({ error: 'Not found' });
     res.sendFile(fullPath);
   });
+});
+
+// Image proxy. Browser-tool observations may contain ![](url) images pointing
+// at arbitrary untrusted scraped hosts; rendering them directly would make the
+// user's browser fetch attacker-chosen URLs (IP/User-Agent leak, tracking
+// pixels). We fetch server-side with SSRF guards (see services/imageProxy) and
+// relay only validated image bytes. Auth via header or ?token= so <img> works,
+// same as agent-attachments.
+app.get('/api/image-proxy', async (req, res) => {
+  const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+  const token = headerToken || queryToken;
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  try {
+    jwt.verify(token, JWT_SECRET);
+  } catch {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  const target = typeof req.query.url === 'string' ? req.query.url : '';
+  if (!target) {
+    return res.status(400).json({ error: 'Missing url' });
+  }
+
+  const result = await fetchSafeImage(target);
+  if (!result.ok || !result.body) {
+    return res.status(result.status).json({ error: result.error || 'Failed to fetch image' });
+  }
+  res.setHeader('Content-Type', result.contentType || 'application/octet-stream');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('Content-Security-Policy', "default-src 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  return res.end(result.body);
 });
 
 // Get available models

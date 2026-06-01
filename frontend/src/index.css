@@ -549,11 +549,13 @@
   display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; border-radius: var(--radius-sm);
   border: 1px solid var(--line);
+  background: transparent;
   transition: border-color 0.15s ease;
 }
 .search-input:focus-within {
   border-color: var(--line-3);
 }
+.search-input input { background: transparent; }
 .search-input input::placeholder { color: var(--fg-3); }
 
 /* ── Kbd hint ── */

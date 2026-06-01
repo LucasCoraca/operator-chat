@@ -60,6 +60,8 @@
     "operatorChat": "Operator Chat",
     "tools": "ツール",
     "noTools": "ツールなし",
+    "searchTools": "ツールを検索...",
+    "noToolsMatch": "検索に一致するツールがありません",
     "allTools": "すべてのツール",
     "enabledTools": "有効なツール",
     "toolsDescription": "これらは次のメッセージに適用されます。",

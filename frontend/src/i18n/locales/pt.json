@@ -60,6 +60,8 @@
     "operatorChat": "Operator Chat",
     "tools": "Ferramentas",
     "noTools": "Sem ferramentas",
+    "searchTools": "Pesquisar ferramentas...",
+    "noToolsMatch": "Nenhuma ferramenta corresponde à pesquisa",
     "allTools": "Todas as ferramentas",
     "enabledTools": "Ferramentas habilitadas",
     "toolsDescription": "Aplicam-se à próxima mensagem.",

@@ -13,6 +13,7 @@ import { getAuthHeader } from '../services/auth';
 import { generateUUID } from '../utils/uuid';
 import CodeBlock, { PreBlock } from './CodeBlock';
 import { UIStreamingContext } from './UIRenderer';
+import { UISendToAssistantContext } from '../openui/uiActionContext';
 import { AgentQuestionDialog, type AgentQuestionPayload } from './AgentQuestionDialog';
 import operatorLogo from '../assets/logo.png';
 
@@ -208,6 +209,38 @@ const AGENT_TASK_PREVIEW_CHARS = 360;
 const markdownRemarkPlugins: PluggableList = [remarkGfm, [remarkMath, { singleDollarTextMath: false }]];
 const markdownRehypePlugins: PluggableList = [rehypeKatex];
 const markdownComponents = { code: CodeBlock, pre: PreBlock };
+
+/**
+ * Image renderer for UNTRUSTED markdown (browser-tool observation bodies).
+ * Scraped pages can embed arbitrary ![](url) images; loading them directly
+ * would leak the user's IP/User-Agent to attacker-chosen hosts and allow
+ * tracking pixels. We route absolute http(s) images through the backend
+ * /api/image-proxy (SSRF-guarded, server-side fetch) instead. data:/relative
+ * srcs are left as-is. Used only via observationMarkdownComponents.
+ */
+function ProxiedImage({ src, alt }: { src?: string; alt?: string }) {
+  if (!src) return null;
+  if (!/^https?:\/\//i.test(src)) {
+    return (
+      <img src={src} alt={alt || ''} loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: '100%', height: 'auto' }} />
+    );
+  }
+  const token = localStorage.getItem('token');
+  const proxied = `/api/image-proxy?url=${encodeURIComponent(src)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+  return (
+    <img
+      src={proxied}
+      alt={alt || ''}
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      style={{ maxWidth: '100%', height: 'auto', borderRadius: 6 }}
+    />
+  );
+}
+
+// Markdown components for untrusted observation content: same as the default
+// set, but images are fetched via the SSRF-guarded backend proxy.
+const observationMarkdownComponents = { code: CodeBlock, pre: PreBlock, img: ProxiedImage };
 
 function TerminalOutput({ normalized, type }: { normalized: string; type?: AgentTerminalEntry['type'] }) {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -482,6 +515,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [toolsLoaded, setToolsLoaded] = useState(false);
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>({ alwaysApprove: false });
   const [showToolPicker, setShowToolPicker] = useState(false);
+  const [toolSearch, setToolSearch] = useState('');
   const [pendingApproval, setPendingApproval] = useState<ToolApprovalRequest | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<'low' | 'medium' | 'high'>('medium');
   const [agentRuns, setAgentRuns] = useState<Record<string, AgentRun>>({});
@@ -1348,6 +1382,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     return true;
   }, [approvalMode, chatId, currentModel, onChatNameChange, showStats, socket, toolPreferences, reasoningEffort]);
 
+  // Handle clicks on OpenUI buttons inside assistant replies (@ToAssistant /
+  // default actions): send the button's message as a new user turn, unless the
+  // agent is already busy.
+  const handleUISendToAssistant = useCallback((message: string) => {
+    if (isProcessing) return;
+    sendMessageContent(message);
+  }, [isProcessing, sendMessageContent]);
+
   useEffect(() => {
     const initialMessage = initialRouteState?.initialMessage;
     if (!initialMessage || !socket || initialMessageSentRef.current) return;
@@ -1788,7 +1830,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
             </div>
             {body ? (
               <div className="mt-2 text-sm text-zinc-300">
-                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+                <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={observationMarkdownComponents}>
                   {body}
                 </ReactMarkdown>
               </div>
@@ -1803,7 +1845,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       <>
         <div className="mt-3 rounded-xl border border-white/5 bg-black/20 px-3 py-3">
           <div className="text-sm prose prose-invert max-w-none">
-            <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>
+            <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={observationMarkdownComponents}>
               {rest.trim()}
             </ReactMarkdown>
           </div>
@@ -2530,7 +2572,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                 {hasStreaming && <span className="inline-block w-1.5 h-1.5 bg-current rounded-full animate-pulse" />}
               </div>
               <div className="relative max-h-[3.75rem] overflow-hidden">
-                <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent via-[rgba(24,24,27,0.45)] to-[rgba(24,24,27,0.92)] pointer-events-none z-10" />
                 <div className="text-zinc-400 text-xs">
                   <ReactMarkdown remarkPlugins={markdownRemarkPlugins} rehypePlugins={markdownRehypePlugins} components={markdownComponents}>{truncatedContent}</ReactMarkdown>
                 </div>
@@ -2767,7 +2808,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         <div className="relative" ref={toolPickerRef}>
           <button
             type="button"
-            onClick={() => setShowToolPicker((prev) => !prev)}
+            onClick={() => { setToolSearch(''); setShowToolPicker((prev) => !prev); }}
             className="inline-flex items-center gap-1.5 rounded px-2 py-1 text-sm font-medium text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.04)] transition-colors"
           >
             <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2777,7 +2818,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           </button>
 
           {showToolPicker && (
-            <div className="absolute bottom-full left-0 z-30 mb-2 w-[26rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/10 bg-[#1b1b1d] shadow-2xl shadow-black/40">
+            <div className="absolute bottom-full left-0 z-30 mb-2 w-[calc(100vw-1.5rem)] max-w-[calc(100vw-1.5rem)] sm:w-[48rem] sm:max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-white/10 bg-[#1b1b1d] shadow-2xl shadow-black/40">
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
                 <div>
                   <div className="text-sm font-semibold text-zinc-100">{t('chat.enabledTools')}</div>
@@ -2806,8 +2847,24 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   </label>
                 </div>
               </div>
-              <div className="max-h-80 overflow-y-auto p-2.5">
-                {availableTools.map((tool) => {
+              <div className="border-b border-white/10 px-3 py-2.5">
+                <input
+                  type="text"
+                  value={toolSearch}
+                  onChange={(event) => setToolSearch(event.target.value)}
+                  placeholder={t('chat.searchTools')}
+                  className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 outline-none focus:border-white/20"
+                />
+              </div>
+              <div className="max-h-[60vh] overflow-y-auto overflow-x-hidden p-2.5">
+                <div className="columns-1 sm:columns-2 gap-2.5">
+                {availableTools
+                  .filter((tool) => {
+                    const q = toolSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q);
+                  })
+                  .map((tool) => {
                   const preference = toolPreferences[tool.name] ?? {
                     enabled: true,
                     autoApprove: !tool.policy.requiresApproval,
@@ -2821,7 +2878,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   return (
                     <div
                       key={tool.name}
-                      className="rounded-xl border border-white/10 bg-black/20 p-3 transition-colors hover:border-white/20"
+                      className="mb-2.5 break-inside-avoid rounded-xl border border-white/10 bg-black/20 p-3 transition-colors hover:border-white/20"
                     >
                       <label className="flex cursor-pointer items-start gap-3">
                         <input
@@ -2873,6 +2930,15 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                 {availableTools.length === 0 && (
                   <div className="px-3 py-4 text-sm text-zinc-500">{t('chat.noTools')}</div>
                 )}
+                {availableTools.length > 0 &&
+                  toolSearch.trim() &&
+                  !availableTools.some((tool) => {
+                    const q = toolSearch.trim().toLowerCase();
+                    return tool.name.toLowerCase().includes(q) || tool.description.toLowerCase().includes(q);
+                  }) && (
+                    <div className="px-3 py-4 text-sm text-zinc-500">{t('chat.noToolsMatch')}</div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -2993,7 +3059,9 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         ) : (
           <>
             <div ref={setScrollContentRef} className="max-w-3xl mx-auto w-full">
-              {renderedMessages}
+              <UISendToAssistantContext.Provider value={handleUISendToAssistant}>
+                {renderedMessages}
+              </UISendToAssistantContext.Provider>
             </div>
             <div ref={messagesEndRef} />
           </>

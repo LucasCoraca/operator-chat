@@ -234,6 +234,8 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [showRemoteWorkspace, setShowRemoteWorkspace] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [modelSearch, setModelSearch] = useState('');
+  const modelDropdownRef = useRef<HTMLDivElement>(null);
   const [invalidChatId, setInvalidChatId] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
@@ -471,6 +473,30 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       document.removeEventListener('keydown', handleEscape);
     };
   }, [showLandingToolPicker]);
+
+  useEffect(() => {
+    if (!showModelDropdown) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (modelDropdownRef.current && !modelDropdownRef.current.contains(event.target as Node)) {
+        setShowModelDropdown(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowModelDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [showModelDropdown]);
 
   useEffect(() => {
     if (urlChatId) {
@@ -1307,9 +1333,9 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
           </button>
 
           {/* Model dropdown - left */}
-          <div className="relative">
+          <div className="relative" ref={modelDropdownRef}>
             <button
-              onClick={(e) => { e.stopPropagation(); setShowModelDropdown(!showModelDropdown); }}
+              onClick={(e) => { e.stopPropagation(); setModelSearch(''); setShowModelDropdown(!showModelDropdown); }}
               className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-sm)] text-xs font-medium text-[var(--fg-1)] hover:bg-[rgba(255,255,255,.04)] transition-colors"
               title={currentModel || 'Choose model'}
             >
@@ -1320,11 +1346,27 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             </button>
             {showModelDropdown && (
               <>
-                <div className="fixed inset-0 z-40" onClick={() => setShowModelDropdown(false)} />
-                <div className="absolute left-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-[var(--radius)] hairline bg-[var(--bg-elev)] shadow-2">
-                  <div className="py-1">
-                    {models.length > 0 ? (
-                      models.map((model) => (
+                <div className="absolute left-0 top-full z-50 mt-2 w-56 flex flex-col overflow-hidden rounded-[var(--radius)] hairline bg-[var(--bg-elev)] shadow-2">
+                  <div className="p-1.5 border-b border-[var(--line)]">
+                    <input
+                      type="text"
+                      autoFocus
+                      value={modelSearch}
+                      onChange={(e) => setModelSearch(e.target.value)}
+                      placeholder="Search models..."
+                      className="w-full bg-[rgba(255,255,255,.04)] rounded-[var(--radius-sm)] px-2.5 py-1.5 text-sm text-[var(--fg-0)] placeholder:text-[var(--fg-3)] outline-none focus:bg-[rgba(255,255,255,.06)]"
+                    />
+                  </div>
+                  <div className="py-1 max-h-[320px] overflow-y-auto">
+                    {(() => {
+                      const filtered = models.filter((m) => m.toLowerCase().includes(modelSearch.toLowerCase()));
+                      if (models.length === 0) {
+                        return <div className="px-3 py-1.5 text-sm text-[var(--fg-3)]">No models available</div>;
+                      }
+                      if (filtered.length === 0) {
+                        return <div className="px-3 py-1.5 text-sm text-[var(--fg-3)]">No matches</div>;
+                      }
+                      return filtered.map((model) => (
                         <button
                           key={model}
                           onClick={() => { handleModelChange(model); setShowModelDropdown(false); }}
@@ -1339,10 +1381,8 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                           )}
                           <span className={currentModel === model ? '' : 'ml-0.5'}>{model}</span>
                         </button>
-                      ))
-                    ) : (
-                      <div className="px-3 py-1.5 text-sm text-[var(--fg-3)]">No models available</div>
-                    )}
+                      ));
+                    })()}
                   </div>
                 </div>
               </>
