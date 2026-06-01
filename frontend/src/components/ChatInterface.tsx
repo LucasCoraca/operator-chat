@@ -2384,13 +2384,13 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           rollbackAgentRun(runId!, entry.sourceMessageID!);
         }}
         className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-300 transition-colors hover:border-amber-500/50 hover:bg-amber-500/10 hover:text-amber-200"
-        title="Rewind the agent back to this step and replay from here"
+        title={t('chat.rewindTooltip')}
       >
         <svg className="size-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a5 5 0 015 5v0a5 5 0 01-5 5H9" />
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 6l-4 4 4 4" />
         </svg>
-        rewind
+        {t('chat.rewind')}
       </button>
     ) : null;
 
@@ -2430,7 +2430,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           {entry.status === 'running' && (
             <span className="flex items-center gap-1 text-[11px] text-emerald-300">
               <span className="size-1.5 rounded-full bg-emerald-300 animate-pulse" />
-              running
+              {t('chat.running')}
             </span>
           )}
           {rewindButton}
@@ -2472,7 +2472,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     if (!run) {
       return (
         <div className="max-w-3xl mx-auto rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-zinc-500">
-          Loading agent run...
+          {t('chat.agentRunLoading')}
         </div>
       );
     }
@@ -2486,12 +2486,12 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     const commandCount = terminalEntries.filter((entry) => entry.type === 'command').length;
 
     return (
-      <div ref={(el) => agentCardRefs.current.set(run.id, el)} className="max-w-4xl mx-auto min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30">
+      <div ref={(el) => agentCardRefs.current.set(run.id, el)} className="max-w-4xl mx-auto min-w-0 rounded-2xl border border-white/10 bg-[#080809] shadow-2xl shadow-black/30 [&>*:first-child]:rounded-t-2xl [&>*:last-child]:rounded-b-2xl">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/10 bg-[#111113] px-4 py-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-zinc-100">{run.title}</div>
             <div className="mt-1 truncate font-mono text-xs text-zinc-500">
-              {run.workspaceRoot} · {commandCount} command{commandCount === 1 ? '' : 's'} · {terminalEntries.length} events
+              {run.workspaceRoot} · {t('chat.agentCommandsEvents', { commands: commandCount, events: terminalEntries.length })}
             </div>
           </div>
           <span className={`rounded-full border px-2 py-0.5 text-xs uppercase ${statusClass}`}>
@@ -2500,14 +2500,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         </div>
 
         <div className="border-b border-white/5 px-4 py-3">
-          <div className="font-mono text-xs text-zinc-500">task</div>
+          <div className="font-mono text-xs text-zinc-500">{t('chat.agentTaskLabel')}</div>
           <AgentTaskPreview prompt={run.prompt} />
         </div>
 
         <div>
           {terminalEntries.length === 0 ? (
             <div className="px-4 py-5 font-mono text-sm text-zinc-500">
-              Waiting for the agent to start...
+              {t('chat.agentWaiting')}
             </div>
           ) : (() => {
             const COLLAPSE_THRESHOLD = 3;
@@ -2520,7 +2520,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   <button
                     type="button"
                     onClick={() => toggleAgentRunTrace(run.id)}
-                    className="flex w-full items-center gap-2 border-b border-white/5 px-4 py-2.5 text-left font-mono text-xs text-zinc-400 transition-colors hover:bg-white/[0.02] hover:text-zinc-200"
+                    className={`${expanded ? 'sticky -top-5 sm:-top-6 md:-top-5 z-10' : ''} flex w-full items-center gap-2 border-b border-white/10 bg-[#16161a] px-4 py-2.5 text-left font-mono text-xs font-bold text-zinc-200 transition-colors hover:bg-[#1d1d22] hover:text-zinc-100`}
                   >
                     <svg className={`size-3.5 shrink-0 transition-transform ${expanded ? '' : '-rotate-90'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -2536,16 +2536,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   collapsible ? (
                     <CollapsibleReveal onOpened={() => revealScrollToBottom(agentCardRefs.current.get(run.id))}>
                       {terminalEntries.map((entry) => renderTerminalEntry(entry, run.id))}
-                      <button
-                        type="button"
-                        onClick={() => toggleAgentRunTrace(run.id)}
-                        className="flex w-full items-center gap-2 border-t border-white/5 px-4 py-2.5 text-left font-mono text-xs text-zinc-400 transition-colors hover:bg-white/[0.02] hover:text-zinc-200"
-                      >
-                        <svg className="size-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-                        </svg>
-                        <span>{t('chat.agentTraceCollapse')}</span>
-                      </button>
                     </CollapsibleReveal>
                   ) : (
                     terminalEntries.map((entry) => renderTerminalEntry(entry, run.id))
@@ -2564,7 +2554,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           {run.status === 'running' && (
             <div className="flex items-center gap-2 px-4 py-3 font-mono text-sm text-emerald-300">
               <span className="text-zinc-500">$</span>
-              <span className="h-4 w-2 animate-pulse bg-emerald-300" aria-label="Agent is working" />
+              <span className="h-4 w-2 animate-pulse bg-emerald-300" aria-label={t('chat.agentWorking')} />
             </div>
           )}
         </div>
@@ -2582,7 +2572,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                   }
                 }}
                 rows={1}
-                placeholder="Send a message to this running agent"
+                placeholder={t('chat.agentSteeringPlaceholder')}
                 className="min-h-9 flex-1 resize-none rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-zinc-100 outline-none transition-colors placeholder:text-zinc-600 focus:border-emerald-500/40"
               />
               <button
@@ -2618,7 +2608,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
         {(run.status === 'cancelled' || run.status === 'failed') && (
           <div className="flex items-center justify-between gap-3 border-t border-white/10 bg-[#0d0d0f] px-4 py-3">
             <div className="text-xs text-zinc-400">
-              This run stopped before finishing. You can resume from where it left off.
+              {t('chat.agentStoppedResume')}
             </div>
             <button
               type="button"
@@ -2629,14 +2619,14 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              Resume
+              {t('chat.resume')}
             </button>
           </div>
         )}
 
         {(agentRunTasks[run.id]?.length ?? 0) > 0 && (
           <div className="border-t border-white/10 bg-[#0a0a0c] px-4 py-3">
-            <div className="mb-2 font-mono text-xs uppercase tracking-wide text-zinc-500">tasks</div>
+            <div className="mb-2 font-mono text-xs uppercase tracking-wide text-zinc-500">{t('chat.agentTasksLabel')}</div>
             <ul className="space-y-1.5">
               {agentRunTasks[run.id]!.map((task) => {
                 const priorityClass =
@@ -2769,9 +2759,18 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     }
 
     return (
-      <div key={`reasoning-${idx}`} ref={(el) => reasoningCardRefs.current.set(idx, el)} className="mx-auto space-y-2 mt-2 mb-2">
+      <div key={`reasoning-${idx}`} ref={(el) => reasoningCardRefs.current.set(idx, el)} className="mx-auto mt-2 mb-2 rounded-xl border border-white/5 bg-surface-100/50 [&>*:first-child]:rounded-t-xl [&>*:last-child]:rounded-b-xl">
+        <button
+          onClick={() => toggleThoughts(idx)}
+          className="sticky -top-5 sm:-top-6 md:-top-5 z-10 flex w-full items-center gap-2 border-b border-white/5 bg-[#16161a] px-4 py-2.5 text-left font-mono text-xs font-bold text-zinc-200 transition-colors hover:bg-[#1d1d22] hover:text-zinc-100"
+        >
+          <svg className="size-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
+          </svg>
+          {t('chat.hideSteps')}
+        </button>
         <CollapsibleReveal onOpened={() => revealScrollToBottom(reasoningCardRefs.current.get(idx))}>
-        <div className="min-w-0 max-w-full break-words space-y-2 overflow-hidden rounded-xl border border-white/5 bg-surface-100/50 p-3 sm:max-w-full sm:p-4">
+        <div className="min-w-0 max-w-full break-words space-y-2 p-3 sm:max-w-full sm:p-4">
           {stepsToDisplay.map((step, stepIdx) => renderAgentStep(step, stepIdx))}
           {isProcessingMsg && streamingThoughtContent && currentStepType === 'thought' && (
             <div className="min-w-0 overflow-hidden rounded-2xl border border-white/5 bg-black/20 p-3">
@@ -2791,15 +2790,6 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               </div>
             </div>
           )}
-          <button
-            onClick={() => toggleThoughts(idx)}
-            className="flex items-center gap-2 pt-1 text-xs text-zinc-500 transition-colors hover:text-zinc-300"
-          >
-            <svg className="size-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 15l-7-7-7 7" />
-            </svg>
-            {t('chat.hideSteps')}
-          </button>
         </div>
         </CollapsibleReveal>
       </div>
@@ -3264,17 +3254,18 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       <div className="px-2 pb-2 sm:px-3 sm:pb-3 md:px-5 md:pb-4">
         <div className="max-w-3xl mx-auto">
           {pendingApproval && (
-            <div className="mb-3 rounded-2xl border border-amber-500/25 bg-[linear-gradient(180deg,rgba(245,158,11,0.14),rgba(245,158,11,0.06))] p-4 shadow-lg shadow-amber-900/10">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <div className="flex size-7 items-center justify-center rounded-lg bg-amber-500/15 text-amber-200">
-                      <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                      </svg>
-                    </div>
-                    <div className="text-sm font-semibold text-amber-100">{t('chat.toolApprovalRequired')}</div>
-                    <span className={`rounded-full border px-2 py-0.5 text-[10px] uppercase ${
+            <div className="mb-3 overflow-hidden rounded-2xl border border-amber-500/30 bg-[linear-gradient(180deg,rgba(245,158,11,0.10),rgba(245,158,11,0.03))] shadow-lg shadow-amber-900/10">
+              {/* Header */}
+              <div className="flex items-start gap-3 px-4 pb-3 pt-3.5">
+                <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-200">
+                  <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold text-amber-100">{t('chat.toolApprovalRequired')}</span>
+                    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
                       pendingApproval.policy.riskLevel === 'high'
                         ? 'border-red-500/30 bg-red-500/15 text-red-200'
                         : pendingApproval.policy.riskLevel === 'medium'
@@ -3284,20 +3275,13 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                       {pendingApproval.policy.riskLevel}
                     </span>
                   </div>
-
-                  <div className="mt-2 text-sm text-zinc-200">
-                    {t('chat.toolWantsToRun', { toolName: pendingApproval.toolName, riskLevel: pendingApproval.policy.riskLevel })}
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-300">
-                    <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5">
-                      tool: {pendingApproval.toolName}
-                    </span>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-zinc-400">
+                    <span className="rounded-md bg-black/30 px-1.5 py-0.5 font-mono text-[11px] text-amber-100/90">{pendingApproval.toolName}</span>
                     <span className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5">
                       {t('chat.sandbox')}: {pendingApproval.policy.sandboxPolicy}
                     </span>
                     {(pendingApproval.policy.capabilities.length > 0 ? pendingApproval.policy.capabilities : ['none']).map((capability) => (
-                      <span key={`approval-cap-${capability}`} className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5 text-zinc-400">
+                      <span key={`approval-cap-${capability}`} className="rounded-full border border-white/10 bg-black/20 px-2 py-0.5">
                         {capability}
                       </span>
                     ))}
@@ -3305,37 +3289,57 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
                 </div>
               </div>
 
-              <div className="mt-3 rounded-xl border border-white/10 bg-black/25 p-2.5">
-                <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-zinc-400">Arguments</div>
-                <div className="max-h-60 overflow-auto rounded-lg bg-black/25 p-2">
-                  {renderActionArgs(pendingApproval.toolArgs)}
+              {/* Arguments */}
+              {pendingApproval.toolArgs && Object.keys(pendingApproval.toolArgs).length > 0 && (
+                <div className="space-y-3 border-t border-amber-500/15 bg-black/25 px-4 py-3">
+                  {Object.entries(pendingApproval.toolArgs).map(([key, value]) => {
+                    const str = typeof value === 'string' ? value : null;
+                    const isBlock = str !== null && (str.includes('\n') || str.length > 80);
+                    return (
+                      <div key={key} className="min-w-0">
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-200/60">
+                          {formatToolLabel(key)}
+                        </div>
+                        {str !== null ? (
+                          isBlock ? (
+                            <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-white/10 bg-black/30 p-2.5 font-mono text-[12px] leading-5 text-zinc-300">{str}</pre>
+                          ) : (
+                            <div className="break-words text-sm text-zinc-200">{str}</div>
+                          )
+                        ) : (
+                          renderStructuredValue(value)
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              </div>
+              )}
 
-              <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+              {/* Actions */}
+              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-amber-500/15 bg-black/10 px-4 py-3">
+                {pendingApproval.policy.supportsAutoApprove && (
+                  <button
+                    type="button"
+                    onClick={() => respondToApproval(true, true)}
+                    className="mr-auto rounded-lg px-3 py-2 text-xs font-medium text-[var(--fg-3)] transition-colors hover:bg-white/[0.04] hover:text-[var(--fg-1)]"
+                  >
+                    {t('chat.alwaysApprove')}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => respondToApproval(false)}
-                  className="rounded-lg border border-white/10 bg-[var(--bg-2)] px-3 py-2 text-xs font-medium text-[var(--fg-2)] transition-colors hover:bg-[var(--bg-3)]"
+                  className="rounded-lg border border-white/10 bg-[var(--bg-2)] px-4 py-2 text-xs font-medium text-[var(--fg-1)] transition-colors hover:bg-[var(--bg-3)]"
                 >
                   {t('common.deny')}
                 </button>
                 <button
                   type="button"
                   onClick={() => respondToApproval(true)}
-                  className="rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--accent-ink)] transition-colors hover:opacity-80"
+                  className="rounded-lg bg-[var(--accent)] px-5 py-2 text-xs font-semibold text-[var(--accent-ink)] transition-colors hover:opacity-80"
                 >
                   {t('common.approve')}
                 </button>
-                {pendingApproval.policy.supportsAutoApprove && (
-                  <button
-                    type="button"
-                    onClick={() => respondToApproval(true, true)}
-                    className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs font-medium text-[var(--fg-2)] transition-colors hover:bg-[var(--bg-2)]"
-                  >
-                    {t('chat.alwaysApprove')}
-                  </button>
-                )}
               </div>
             </div>
           )}
