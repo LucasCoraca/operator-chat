@@ -9,11 +9,18 @@ A chat-first workspace for running LLMs with tools, approvals, per-chat sandboxe
 
 ![Operator Chat interface](docs/screen.png)
 
+### 🎨 Generative UI in action
+
+The assistant composes its replies as a live, interactive interface — charts, tables, embedded videos, forms, and more — rendered inline as it streams.
+
+![Generative UI demo](docs/demo.gif)
+
 ## ✨ Features
 
 - **Chat with LLMs** - Connect to any llama.cpp-compatible server
 - **Real-time Streaming** - Separate streaming for reasoning steps and final answers
 - **Structured Reasoning** - Visual display of the agent's thought process
+- **Generative UI** - Replies are composed as a live interface (charts, tables, embedded videos, forms) via OpenUI Lang, rendered inline as they stream
 - **Built-in Tools**:
   - 🔍 Web search (SearXNG integration)
   - 📁 File system operations (read, write, list, delete)
