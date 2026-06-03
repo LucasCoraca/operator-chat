@@ -64,6 +64,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# yt-dlp powers the youtube_transcript tool. Use the standalone Linux build
+# (a self-contained PyInstaller binary) so we don't have to install Python.
+RUN wget -q -O /usr/local/bin/yt-dlp \
+    https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+    && chmod a+rx /usr/local/bin/yt-dlp
+
 # Create non-root user. Use `useradd -m` so /home/nodejs exists for any
 # tooling that defaults to $HOME.
 RUN groupadd -g 1001 nodejs && useradd -m -u 1001 -g nodejs -s /bin/bash nodejs

@@ -106,7 +106,17 @@
     "reasoningEffort": "Усилие рассуждения",
     "reasoningEffortLow": "Низкое",
     "reasoningEffortMedium": "Среднее",
-    "reasoningEffortHigh": "Высокое"
+    "reasoningEffortHigh": "Высокое",
+    "play": "Воспроизвести",
+    "pause": "Пауза",
+    "resumeAudio": "Продолжить",
+    "generatingAudio": "Генерация…",
+    "audioFailed": "Не удалось создать аудио. Сервер синтеза речи может быть недоступен.",
+    "recordVoice": "Записать голосовой запрос",
+    "stopRecording": "Остановить и расшифровать",
+    "transcribing": "Расшифровка…",
+    "transcribeFailed": "Не удалось расшифровать аудио. Сервер распознавания речи может быть недоступен.",
+    "micUnavailable": "Микрофон недоступен. Проверьте разрешения и что страница открыта по HTTPS или localhost."
   },
   "settings": {
     "title": "Настройки",
@@ -136,7 +146,16 @@
     "mcpServer": "MCP сервер (Скоро)",
     "mcpServerDescription": "Интеграция MCP сервера будет доступна в будущем обновлении.",
     "language": "Язык",
-    "languageDescription": "Выберите предпочитаемый язык"
+    "languageDescription": "Выберите предпочитаемый язык",
+    "voice": "Голос",
+    "voiceTagline": "Синтез речи",
+    "voiceDescription": "Озвучивайте ответы. Выберите голос и при желании опишите стиль речи.",
+    "voicePreset": "Голос",
+    "voicePresetHint": "Выберите предустановленный голос для озвучивания ответов.",
+    "voiceInstruction": "Указание стиля",
+    "voiceInstructionHint": "Необязательно. Опишите, как должен звучать голос. Применяется только к настраиваемым голосам.",
+    "voiceInstructionPlaceholder": "напр. Приветливая женщина с британским акцентом",
+    "voicesLoadError": "Не удалось загрузить голоса. Голосовой сервер может быть недоступен."
   },
   "personality": {
     "managePersonalities": "Управление личностями",

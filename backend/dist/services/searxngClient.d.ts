@@ -9,6 +9,8 @@ export interface SearchResult {
     content: string;
     engine: string;
     score: number;
+    /** Image/thumbnail URL when the result carries one (image results, rich cards). */
+    imageUrl?: string;
 }
 export declare class SearXNGClient {
     private config;

@@ -3,8 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { PersonalitySelector } from './PersonalitySelector';
 import { MCPServerManager } from './MCPServerManager';
 import { supportedLanguages } from '../i18n';
+import * as authService from '../services/auth';
 
-type SettingsSection = 'general' | 'tools' | 'agent' | 'personality' | 'mcp';
+type SettingsSection = 'general' | 'tools' | 'agent' | 'personality' | 'voice' | 'mcp';
 
 interface ChatPersonality {
   id: string;
@@ -21,6 +22,8 @@ interface Settings {
     selectedPersonality: string;
     selectedModel?: string;
     defaultToolPreferences: Record<string, ToolPreference>;
+    voicePreset?: string;
+    voiceInstruction?: string;
   };
   remoteWorkspace: {
     enabled: boolean;
@@ -95,6 +98,17 @@ function SettingsPanel({
   const [formData, setFormData] = useState<Settings>(settings);
   const [activeSection, setActiveSection] = useState<SettingsSection>('general');
 
+  // Available TTS voices (presets + any custom WAVs) loaded from the server.
+  const [voices, setVoices] = useState<string[]>([]);
+  const [voicesError, setVoicesError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/tts/voices', { headers: authService.getAuthHeader() })
+      .then((res) => (res.ok ? res.json() : { voices: [] }))
+      .then((data) => setVoices(Array.isArray(data.voices) ? data.voices : []))
+      .catch(() => setVoicesError(t('settings.voicesLoadError')));
+  }, [t]);
+
   const sections: Array<{
     id: SettingsSection;
     label: string;
@@ -138,6 +152,16 @@ function SettingsPanel({
       icon: (
         <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+        </svg>
+      ),
+    },
+    {
+      id: 'voice',
+      label: t('settings.voice'),
+      description: t('settings.voiceTagline'),
+      icon: (
+        <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-14 0m7 7v3m0-3a3 3 0 003-3V5a3 3 0 00-6 0v6a3 3 0 003 3z" />
         </svg>
       ),
     },
@@ -354,6 +378,47 @@ function SettingsPanel({
               </div>
             )}
           </div>
+        </div>
+      );
+    }
+
+    if (activeSection === 'voice') {
+      return (
+        <div className="space-y-6">
+          <div>
+            <h3 className="section-title text-[var(--accent)]">{t('settings.voice')}</h3>
+            <p className="mt-1 text-sm text-[var(--fg-3)]">{t('settings.voiceDescription')}</p>
+          </div>
+
+          <section className="studio-card rounded-[var(--radius)] p-4 space-y-5">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--fg-0)]">{t('settings.voicePreset')}</label>
+              <p className="text-xs text-[var(--fg-3)]">{t('settings.voicePresetHint')}</p>
+              <select
+                value={formData.ui.voicePreset || 'kobo'}
+                onChange={(e) => handleChange('ui', 'voicePreset', e.target.value)}
+                className="w-full rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--bg-1)] px-3 py-2 text-sm text-[var(--fg-0)] focus:border-[var(--accent)] focus:outline-none"
+              >
+                {/* Keep the saved voice selectable even before the list loads or if it's a custom WAV not in the list. */}
+                {Array.from(new Set([...(voices.length ? voices : []), formData.ui.voicePreset || 'kobo'])).map((voice) => (
+                  <option key={voice} value={voice}>{voice}</option>
+                ))}
+              </select>
+              {voicesError && <p className="text-xs text-red-400">{voicesError}</p>}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-[var(--fg-0)]">{t('settings.voiceInstruction')}</label>
+              <p className="text-xs text-[var(--fg-3)]">{t('settings.voiceInstructionHint')}</p>
+              <input
+                type="text"
+                value={formData.ui.voiceInstruction || ''}
+                onChange={(e) => handleChange('ui', 'voiceInstruction', e.target.value)}
+                placeholder={t('settings.voiceInstructionPlaceholder')}
+                className="w-full rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--bg-1)] px-3 py-2 text-sm text-[var(--fg-0)] placeholder:text-[var(--fg-3)] focus:border-[var(--accent)] focus:outline-none"
+              />
+            </div>
+          </section>
         </div>
       );
     }

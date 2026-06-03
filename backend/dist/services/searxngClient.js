@@ -25,13 +25,30 @@ class SearXNGClient {
             }
             const response = await axios_1.default.get(url.toString());
             const data = response.data;
-            return data.results.slice(0, maxResults).map(result => ({
-                title: result.title || 'Untitled',
-                url: result.url || '',
-                content: result.content || '',
-                engine: result.engine || 'unknown',
-                score: result.score || 0,
-            }));
+            const toAbsolute = (raw, base) => {
+                if (typeof raw !== 'string' || !raw)
+                    return undefined;
+                try {
+                    const abs = new URL(raw, base).toString();
+                    return /^https?:\/\//i.test(abs) ? abs : undefined;
+                }
+                catch {
+                    return undefined;
+                }
+            };
+            return data.results.slice(0, maxResults).map(result => {
+                const pageUrl = result.url || '';
+                return {
+                    title: result.title || 'Untitled',
+                    url: pageUrl,
+                    content: result.content || '',
+                    engine: result.engine || 'unknown',
+                    score: result.score || 0,
+                    imageUrl: toAbsolute(result.img_src, pageUrl) ||
+                        toAbsolute(result.thumbnail_src, pageUrl) ||
+                        toAbsolute(result.thumbnail, pageUrl),
+                };
+            });
         }
         catch (error) {
             console.error('SearXNG search error:', error);

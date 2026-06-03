@@ -9,6 +9,7 @@ export interface AgentStep {
     actionName?: string;
     actionArgs?: Record<string, any>;
     targetMode?: AgentMode;
+    sourceMessageID?: string;
 }
 export interface AgentState {
     steps: AgentStep[];

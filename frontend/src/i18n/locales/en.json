@@ -106,7 +106,17 @@
     "reasoningEffort": "Reasoning Effort",
     "reasoningEffortLow": "Low",
     "reasoningEffortMedium": "Medium",
-    "reasoningEffortHigh": "High"
+    "reasoningEffortHigh": "High",
+    "play": "Play",
+    "pause": "Pause",
+    "resumeAudio": "Resume",
+    "generatingAudio": "Generating…",
+    "audioFailed": "Could not generate audio. The voice server may be unavailable.",
+    "recordVoice": "Record voice prompt",
+    "stopRecording": "Stop & transcribe",
+    "transcribing": "Transcribing…",
+    "transcribeFailed": "Could not transcribe audio. The speech server may be unavailable.",
+    "micUnavailable": "Microphone unavailable. Check permissions and that the page is served over HTTPS or localhost."
   },
   "settings": {
     "title": "Settings",
@@ -136,7 +146,16 @@
     "mcpServer": "MCP Server (Coming Soon)",
     "mcpServerDescription": "MCP server integration will be available in a future update.",
     "language": "Language",
-    "languageDescription": "Select your preferred language"
+    "languageDescription": "Select your preferred language",
+    "voice": "Voice",
+    "voiceTagline": "Text-to-speech",
+    "voiceDescription": "Play replies aloud. Pick a voice and optionally describe a speaking style.",
+    "voicePreset": "Voice",
+    "voicePresetHint": "Choose a preset voice for spoken replies.",
+    "voiceInstruction": "Style instruction",
+    "voiceInstructionHint": "Optional. Describe how the voice should sound. Only applies to customizable voices.",
+    "voiceInstructionPlaceholder": "e.g. Friendly woman with a British accent",
+    "voicesLoadError": "Could not load voices. The voice server may be unavailable."
   },
   "personality": {
     "managePersonalities": "Manage Personalities",

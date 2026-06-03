@@ -18,14 +18,22 @@ RUN npm run build
 # Production stage
 FROM nginx:alpine
 
-# Copy nginx configuration
+# openssl is needed to generate the self-signed TLS cert at startup
+RUN apk add --no-cache openssl
+
+# Copy nginx configuration (server blocks + shared location include)
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY app-locations.conf /etc/nginx/app-locations.conf
+
+# Self-signed cert generator, run by nginx's entrypoint before startup
+COPY 40-generate-cert.sh /docker-entrypoint.d/40-generate-cert.sh
+RUN chmod +x /docker-entrypoint.d/40-generate-cert.sh
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Expose port
-EXPOSE 80
+# Expose HTTP and HTTPS ports
+EXPOSE 80 443
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

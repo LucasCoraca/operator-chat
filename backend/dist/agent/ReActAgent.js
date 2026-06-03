@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ReActAgent = void 0;
 const xml_parser_1 = require("./xml-parser");
 const fileViewCache_1 = require("./fileViewCache");
+const openuiLangPrompt_1 = require("./openuiLangPrompt");
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const TRANSITION_TO_COMPOSE_TOOL = 'transition_to_compose_mode';
@@ -691,6 +692,18 @@ You are in RESEARCH_MODE.
 - If you still need information, call the next tool directly using native function calling.
 - Only call \`${TRANSITION_TO_COMPOSE_TOOL}\` after the requested work is complete and any edits have been verified.
 
+## YOUR REPLY WILL BE RENDERED AS A RICH UI
+After research you transition to compose mode, where your reply is rendered as a live graphical interface using openui-lang. It natively renders charts and graphs (bar, line, area, pie, donut, scatter, radar), data tables, KPI/stat cards, tabs, accordions, forms, code blocks, images and callouts — with no code or files. Use it to PRESENT information in a clear, human-friendly way.
+
+So when the user just wants to SEE or understand information — "show me a graph", "plot this", "visualize this data", "compare X and Y", "give me a table/dashboard/summary" — you usually do not need to spawn an agent or run code. Gather the data with research tools, then render it as an openui-lang UI in the compose phase.
+
+This does NOT replace real engineering. When the user actually wants working software — a real app, a codebase, a script, files written to disk, or commands executed (e.g. "build me a todo web app", "create/run a project", "write code that…", "set up X") — that is a genuine build/run task and should still go through \`create_agent\` and the workspace/code tools as usual. openui-lang composes an answer; it does not ship software.
+
+Choose by intent: presenting or visualizing data/information → openui-lang in compose mode; building or running actual software → \`create_agent\` and code execution.
+
+### Embedding videos
+openui-lang can embed an inline video player (the \`Video\` component renders a real YouTube player from a watch/youtu.be/embed/shorts URL). When a video would genuinely help — tutorials, how-tos, demos, talks, reviews, music, "show me a video of…", or any topic best understood by watching — proactively use \`web_search\` to find relevant videos and capture the exact, real video URLs (prefer YouTube links that appear in the results). Carry those URLs forward in your research so the compose phase can embed them. NEVER invent, guess, or construct a video URL — only ever embed links you actually found via search.
+
 ## SOURCE CITATION REQUIREMENT
 When you use web_search or browser_visit tools, you must it is imperative to do so cite sources in your final response with URL and title/description.
 
@@ -741,6 +754,62 @@ Always use inline sources like this: "[Source Name](URL), ..."
 This is REQUIRED for any factual claims, statistics, news, or information obtained from web searches or browsing.
 
 ` : '';
+        // The element rules that break most often, defined once so the SAME text can
+        // be repeated verbatim at the top and bottom of the compose prompt (primacy +
+        // recency). Keep this as the single source of truth — edit here, not inline.
+        const composeHardRules = `### Hard rules — read these first (the elements that break most often)
+1. **ONE value per argument slot — extra arguments are silently DROPPED and that text VANISHES from the page.** Every component takes a FIXED number of arguments (shown in its signature). NEVER split prose into several comma-separated strings — \`MarkDownRenderer("p1", "p2", "p3")\` is WRONG (the renderer logs \`"MarkDownRenderer takes 2 arg(s), got 3 (1 excess dropped)"\` and only the first paragraph survives). Put every paragraph into ONE string with \`\\n\\n\` between them: \`MarkDownRenderer("First.\\n\\nSecond.\\n\\nThird.")\` — or split into SEPARATE component variables listed in a parent \`Stack([...])\`.
+2. **Inside a \`\`\`ui fence, write ONLY valid openui-lang** — no markdown, prose, or JSX. Use ONLY the component names and signatures from the spec; never invent a component (there is NO \`Row\`, \`Column\`, \`Grid\`, or \`ImageGalleryImage\`) and never add extra arguments.
+3. **Markdown formatting** (\`**bold**\`, lists, \`#\` headings, links) renders ONLY inside \`MarkDownRenderer\`/\`TextContent\`. Every OTHER field is PLAIN TEXT — \`CardHeader\` title/subtitle, \`StepsItem\` titles, \`TextCallout\`, \`Tag\`, \`Button\` labels, \`Table\` column labels, \`Tabs\`/\`Accordion\` labels — so asterisks there show literally. To emphasize a short label use \`TextContent(text, "large-heavy")\`, not \`**\`.
+4. **Charts need one number per label.** In \`BarChart\`/\`LineChart\`/\`AreaChart(labels, series)\`, each \`Series\` \`values\` array length MUST equal \`labels\` length or bars/points go missing. For one value per category use a SINGLE series: \`BarChart(["EUA", "Irã", "Israel"], [Series("Perdas", [2.8, 1.45, 0.2])])\` — NOT one series per category. Use multiple series only to compare metrics across the SAME labels.
+5. **1D charts take plain NUMBERS, not objects.** \`PieChart\`/\`RadialChart\`/\`SingleStackedBarChart(labels, values)\` — e.g. \`PieChart(["Low", "Med", "High"], [4, 7, 2], "donut")\`. Aggregate list data into numbers with \`@Count(@Filter(...))\`.
+6. **Tables are COLUMN-oriented, not row-oriented.** \`Table([Col("Language", langs), Col("Users", users, "number")])\` — each \`Col\` holds its OWN data array. Pluck columns from data with \`data.rows.fieldName\`.
+7. **Forms:** define one \`FormControl\` per field as its own variable (so it streams), ALWAYS pass \`Buttons(...)\` as the 2nd \`Form\` argument, and NEVER nest a \`Form\` inside a \`Form\`.
+8. **Tabs/Accordion only switch content INSIDE their items.** Put each view in its own \`TabItem\`/\`AccordionItem\` content array: \`Tabs([TabItem("a", "Operacional", [chartA]), TabItem("b", "Perdas", [chartB])])\`. Do NOT place the charts on the page AND a separate Tabs widget beside them. When unsure, just stack sections vertically.
+9. **Layout:** \`root = Stack(...)\` is the FIRST line and every variable must be reachable from it. Stack sections vertically by default; use a 2-column \`Stack([...], "row")\` ONLY for genuinely parallel content, never more than 2 columns, and never leave a near-empty column.
+10. **Media:** embed \`Image(alt, src)\` or \`Video(src)\` ONLY with REAL URLs you actually saw in research — never invent one (fabricated URLs render broken). Judge an image only by its description; skip generic/unrelated/"(no description)" ones. For multiple images use a \`Stack\` of \`Image\`, NOT \`ImageGallery\`.`;
+        const visualizationSection = this.currentMode === 'compose_reply_mode' ? `
+
+## RESPONSE FORMAT — COMPOSE YOUR REPLY AS A UI
+
+${composeHardRules}
+
+Your replies are rendered in a graphical interface, not a plain text console. **openui-lang is your PRIMARY response format — strongly prefer it over raw text.** Compose your answer AS an interface: a fenced \`\`\`ui code block containing an openui-lang program that lays out your whole response. It renders live, streaming progressively as you write it.
+
+This includes your TEXT. openui-lang has text components, so put your prose INSIDE the UI rather than writing plain markdown:
+- \`MarkDownRenderer(text)\` — multi-paragraph explanations and markdown text. It takes exactly ONE string argument: put ALL paragraphs into that single string with literal \`\\n\\n\` between them. NEVER write paragraphs as separate comma-separated arguments — \`MarkDownRenderer("p1", "p2", "p3")\` is WRONG and the extra paragraphs are silently dropped.
+- \`TextContent(text, size?)\` — shorter text, headings, labels (sizes: "small" | "default" | "large" | "small-heavy" | "large-heavy").
+- \`Callout\` / \`TextCallout\` — highlight key points, tips, warnings.
+Then structure and enrich with the rest of the catalog: \`Card\`/\`CardHeader\` for sections, \`BarChart\`/\`LineChart\`/\`PieChart\` + \`Table\` for data, \`Steps\` for processes, \`Tabs\`/\`Accordion\` to organize, \`Tag\`/\`TagBlock\` for labels, \`Image\` for visuals, \`Video\` to embed videos.
+
+If your research gathered relevant video links (e.g. YouTube URLs from web_search), embed them inline with the \`Video\` component so the user can watch them right here — don't just paste the raw link as text. Only use real URLs you actually found; never invent one.
+
+**Default: wrap essentially every substantive answer in a \`\`\`ui block** — explanations, summaries, comparisons, lists, guides, and data alike. A well-composed UI is clearer and more pleasant than a wall of text. Only answer in plain prose (no \`\`\`ui block) for trivial conversational turns: a one-line reply, an acknowledgment, or a clarifying question. When unsure, use openui-lang.
+
+You may include MULTIPLE \`\`\`ui blocks in one reply with brief connective prose between them, but prefer to keep the main content inside the block(s). Each block is a self-contained openui-lang program with its own \`root = Stack(...)\`. Everything INSIDE a \`\`\`ui fence must be valid openui-lang and nothing else (no markdown, no prose, no JSX).
+
+The complete openui-lang specification follows. Use ONLY the components and exact signatures it defines — do not invent component names or add extra arguments. Follow its syntax, component signatures, and examples precisely.
+
+${openuiLangPrompt_1.OPENUI_LANG_PROMPT}
+
+### Example — an explanatory answer composed entirely as a UI
+A question like "How does caching speed up my app?" should be answered as an interface, not prose:
+
+\`\`\`ui
+root = Stack([header, intro, benefits, chart])
+header = CardHeader("How Caching Speeds Up Your App", "Trade memory for latency")
+intro = MarkDownRenderer("Caching stores the results of expensive operations so repeat requests are served from fast memory instead of recomputing or refetching them.")
+benefits = Stack([b1, b2, b3], "row")
+b1 = TextCallout("success", "Lower latency", "Cached reads avoid slow disk or network round-trips.")
+b2 = TextCallout("info", "Less load", "Fewer hits reach your database or upstream APIs.")
+b3 = TextCallout("neutral", "Better scale", "The same hardware serves more concurrent users.")
+chart = BarChart(["No cache", "Cold cache", "Warm cache"], [latency])
+latency = Series("Latency (ms)", [240, 180, 12])
+\`\`\`
+
+### Before you finish — re-check these (same rules as above; these break the render most often)
+${composeHardRules}
+` : '';
         return `Knowledge Cutoff: December 2023
 
 ${this.getLanguageInstruction()}
@@ -753,7 +822,7 @@ ${workspaceSection}${personalitySection}
 - Use only structured tool calls for tools.
 - Do not assume that normal assistant text is safe to emit unless the mode instructions below explicitly allow it.
 - call tools instead of describing tool usage in prose.
-${modeSection}${composeSection}
+${modeSection}${composeSection}${visualizationSection}
 
 Be helpful, thorough, and use tools effectively when needed.`;
     }

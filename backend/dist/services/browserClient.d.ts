@@ -15,6 +15,12 @@ export interface BrowserContent {
     sectionStart?: number;
     sectionEnd?: number;
 }
+/** A real image found on a page, surfaced so the (text-only) model can cite its URL. */
+export interface ExtractedImage {
+    url: string;
+    alt: string;
+    context: string;
+}
 export interface BrowserPageCache {
     url: string;
     title: string;
@@ -27,6 +33,7 @@ export interface BrowserPageCache {
         charStart: number;
         charEnd: number;
     }>;
+    images: ExtractedImage[];
     loadedAt: Date;
 }
 export interface BrowserNetworkEntry {
@@ -60,6 +67,11 @@ export interface BrowserSessionResult {
     }>;
 }
 export type BrowserSubAction = {
+    action: 'visit';
+    url: string;
+    bypass_cache?: boolean;
+    timeout_ms?: number;
+} | {
     action: 'click';
     selector: string;
 } | {
@@ -149,6 +161,13 @@ export declare class BrowserClient {
      * Extract full content from page
      */
     private extractFullContent;
+    /**
+     * Collect meaningful images from the page: absolute URL, alt text, and any
+     * caption/title context. Filters out icons, logos, spacers and tracking
+     * pixels, dedupes, and caps the list so it stays a useful menu rather than
+     * noise. Runs in-page so it sees resolved (currentSrc) and loaded dimensions.
+     */
+    private extractImages;
     /**
      * Extract headings with their character positions
      */

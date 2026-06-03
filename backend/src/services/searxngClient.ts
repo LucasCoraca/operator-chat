@@ -12,6 +12,8 @@ export interface SearchResult {
   content: string;
   engine: string;
   score: number;
+  /** Image/thumbnail URL when the result carries one (image results, rich cards). */
+  imageUrl?: string;
 }
 
 export class SearXNGClient {
@@ -38,15 +40,32 @@ export class SearXNGClient {
       }
 
       const response = await axios.get(url.toString());
-      const data = response.data as { results: SearchResult[] };
-      
-      return data.results.slice(0, maxResults).map(result => ({
-        title: result.title || 'Untitled',
-        url: result.url || '',
-        content: result.content || '',
-        engine: result.engine || 'unknown',
-        score: result.score || 0,
-      }));
+      const data = response.data as { results: Array<Record<string, unknown>> };
+
+      const toAbsolute = (raw: unknown, base: string): string | undefined => {
+        if (typeof raw !== 'string' || !raw) return undefined;
+        try {
+          const abs = new URL(raw, base).toString();
+          return /^https?:\/\//i.test(abs) ? abs : undefined;
+        } catch {
+          return undefined;
+        }
+      };
+
+      return data.results.slice(0, maxResults).map(result => {
+        const pageUrl = (result.url as string) || '';
+        return {
+          title: (result.title as string) || 'Untitled',
+          url: pageUrl,
+          content: (result.content as string) || '',
+          engine: (result.engine as string) || 'unknown',
+          score: (result.score as number) || 0,
+          imageUrl:
+            toAbsolute(result.img_src, pageUrl) ||
+            toAbsolute(result.thumbnail_src, pageUrl) ||
+            toAbsolute(result.thumbnail, pageUrl),
+        };
+      });
     } catch (error) {
       console.error('SearXNG search error:', error);
       throw new Error(`Search failed: ${error instanceof Error ? error.message : 'Unknown error'}`);

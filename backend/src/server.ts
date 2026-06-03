@@ -5,6 +5,7 @@ import { createServer } from 'http';
 import crypto from 'crypto';
 import multer from 'multer';
 import jwt from 'jsonwebtoken';
+import { Agent } from 'undici';
 import path from 'path';
 import fs from 'fs';
 import { LlamaClient, LlamaConfig, ChatTimings } from './services/llamaClient';
@@ -84,10 +85,43 @@ const storage: multer.StorageEngine = multer.diskStorage({
   },
 });
 
-const upload = multer({ 
+const upload = multer({
   storage,
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
+  },
+});
+
+// KoboldCpp serves both text-to-speech (/api/extra/tts) and Whisper speech-to-text
+// (/api/extra/transcribe) from a single host. TTS_BASE_URL / WHISPER_BASE_URL can
+// still override each independently, otherwise both fall back to KCPP_BASE_URL.
+const KCPP_BASE_URL = process.env.KCPP_BASE_URL || 'http://192.168.15.126:5001';
+const TTS_BASE_URL = process.env.TTS_BASE_URL || KCPP_BASE_URL;
+
+// TTS/Whisper run on CPU and can take several minutes to synthesize or transcribe
+// a longer clip. Node's global fetch (undici) aborts with UND_ERR_HEADERS_TIMEOUT
+// after ~5 min by default, which killed longer TTS scripts mid-synthesis. This
+// dispatcher disables the headers/body timeouts so those slow-but-legitimate
+// requests can finish (connect still times out fast so a truly-down server fails
+// quickly).
+const slowMediaDispatcher = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  connectTimeout: 10_000,
+});
+
+// Default TTS preset used when a user hasn't picked one. Must be a valid entry
+// from GET /api/extra/speakers_list (presets: kobo cheery sleepy shouty chatty
+// random instruct, plus any WAV files in the server's --ttsdir).
+const DEFAULT_TTS_VOICE = process.env.TTS_DEFAULT_VOICE || 'kobo';
+
+// Speech-to-text (Whisper) server for voice prompts. Recorded audio is held in
+// memory and forwarded to Whisper as base64; nothing is persisted to disk.
+const WHISPER_BASE_URL = process.env.WHISPER_BASE_URL || KCPP_BASE_URL;
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024, // 25MB limit
   },
 });
 
@@ -100,6 +134,10 @@ interface UISettings {
   selectedPersonality: string;
   selectedModel?: string;
   defaultToolPreferences?: Record<string, ChatToolPreference>;
+  // TTS playback voice: a preset/WAV name from /api/extra/speakers_list, plus an
+  // optional free-text style instruction (only honoured by CustomVoice presets).
+  voicePreset?: string;
+  voiceInstruction?: string;
 }
 
 interface MCPServersConfig {
@@ -138,6 +176,8 @@ const defaultSettings = {
     selectedPersonality: 'professional',
     selectedModel: undefined as string | undefined,
     defaultToolPreferences: {} as Record<string, ChatToolPreference>,
+    voicePreset: DEFAULT_TTS_VOICE,
+    voiceInstruction: '',
   },
   mcpServers: {} as MCPServersConfig,
   remoteWorkspace: {
@@ -1105,6 +1145,48 @@ async function getSelectedPersonality(userId: string, uiSettings?: UISettings): 
     systemPrompt: dbPersonality.system_prompt,
     isCustom: dbPersonality.is_custom,
   };
+}
+
+// Condense an assistant reply into a short spoken-word script for text-to-speech,
+// keeping the voice/tone of the user's selected personality.
+async function generateTtsScript(
+  text: string,
+  personality: ChatPersonality | null,
+  model?: string,
+  userPrompt?: string
+): Promise<string> {
+  const personaLine = personality
+    ? `Speak in the voice, tone and personality described here:\n${personality.systemPrompt}\n\n`
+    : '';
+  const systemPrompt = `You turn an assistant chat reply into a spoken-word script for a text-to-speech voice.
+${personaLine}Rules:
+- Cover all the important points of the reply — the key facts, steps, names, numbers and conclusions. Do not drop substantive details; this is a faithful spoken version, not a teaser.
+- Aim for roughly 120-220 words (longer is fine if the reply is dense; only be brief if the reply itself is brief).
+- Lead with the takeaway, then walk through the supporting details in a logical order.
+- Use natural, conversational spoken language; turn lists and tables into flowing sentences.
+- No markdown, no code, no URLs, no emojis, no bullet lists, no headings.
+- Do not add greetings or sign-offs unless the personality clearly calls for it.
+- Output ONLY the spoken script, nothing else.`;
+
+  // Give the model the user's question for context so the summary stays on point,
+  // but only the assistant reply should be condensed into speech.
+  const userMessage = userPrompt && userPrompt.trim()
+    ? `The user asked:\n"""\n${userPrompt.trim()}\n"""\n\nThe assistant replied:\n"""\n${text}\n"""\n\nWrite the spoken script that conveys the assistant's reply in full, keeping all the important details.`
+    : text;
+
+  const response = await llamaClient.chat(
+    [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userMessage },
+    ],
+    { temperature: 0.7, maxTokens: 700, excludeReasoning: true, model }
+  );
+
+  const script = (response.content || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim();
+  // Fall back to a trimmed slice of the original if the model returns nothing usable.
+  return script || text.replace(/\s+/g, ' ').trim().slice(0, 400);
 }
 
 function serializeTask(task: ScheduledTask) {
@@ -2243,6 +2325,8 @@ app.get('/api/settings', protect, async (req: AuthRequest, res) => {
       selectedPersonality: userSettings.ui.selectedPersonality,
       selectedModel: userSettings.ui.selectedModel,
       defaultToolPreferences: normalizeToolPreferences(userSettings.ui.defaultToolPreferences, userSettings.ui.defaultToolPreferences),
+      voicePreset: userSettings.ui.voicePreset ?? DEFAULT_TTS_VOICE,
+      voiceInstruction: userSettings.ui.voiceInstruction ?? '',
     },
     remoteWorkspace: serializeRemoteWorkspaceSettings(userSettings.remoteWorkspace),
   });
@@ -3013,6 +3097,115 @@ app.post('/api/sandbox/:sandboxId/upload', protect, upload.single('file'), (req:
       size: req.file.size,
     });
   } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// --- Text-to-speech (voice playback) endpoints ---
+
+// List the voices available on the TTS server (built-in presets plus any WAV
+// files in the server's --ttsdir). Used to populate the voice picker in settings.
+app.get('/api/tts/voices', protect, async (_req: AuthRequest, res) => {
+  try {
+    const listResponse = await fetch(`${TTS_BASE_URL}/api/extra/speakers_list`, {
+      dispatcher: slowMediaDispatcher,
+    } as RequestInit & { dispatcher: typeof slowMediaDispatcher });
+
+    if (!listResponse.ok) {
+      const detail = await listResponse.text().catch(() => '');
+      console.error('TTS speakers_list error:', listResponse.status, detail);
+      return res.status(502).json({ error: 'Could not load voices' });
+    }
+
+    const voices = (await listResponse.json()) as unknown;
+    res.json({ voices: Array.isArray(voices) ? voices : [] });
+  } catch (error) {
+    console.error('TTS voices fetch failed:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// Summarize a reply into a spoken script and synthesize it to a WAV via the TTS server
+app.post('/api/tts/speak', protect, async (req: AuthRequest, res) => {
+  const userId = req.user!.id;
+  const { text, model, userPrompt } = req.body as { text?: string; model?: string; userPrompt?: string };
+
+  if (!text || !text.trim()) {
+    return res.status(400).json({ error: 'No text provided' });
+  }
+
+  try {
+    const userSettings = await getUserSettings(userId);
+    const personality = await getSelectedPersonality(userId, userSettings.ui);
+    const script = await generateTtsScript(text, personality, model, userPrompt);
+
+    const voice = userSettings.ui.voicePreset?.trim() || DEFAULT_TTS_VOICE;
+    const instruction = userSettings.ui.voiceInstruction?.trim();
+    const ttsBody: Record<string, string> = { input: script, voice };
+    // instruction is only meaningful for CustomVoice/VoiceDesign presets; the
+    // server ignores it for the others, so it's safe to always include when set.
+    if (instruction) ttsBody.instruction = instruction;
+
+    const ttsResponse = await fetch(`${TTS_BASE_URL}/api/extra/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(ttsBody),
+      dispatcher: slowMediaDispatcher,
+    } as RequestInit & { dispatcher: typeof slowMediaDispatcher });
+
+    if (!ttsResponse.ok) {
+      const detail = await ttsResponse.text().catch(() => '');
+      console.error('TTS server error:', ttsResponse.status, detail);
+      return res.status(502).json({ error: 'Voice synthesis failed' });
+    }
+
+    const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
+    res.setHeader('Content-Type', 'audio/wav');
+    // Expose the spoken script for clients that want to display/caption it
+    res.setHeader('X-Tts-Script', encodeURIComponent(script));
+    res.setHeader('Access-Control-Expose-Headers', 'X-Tts-Script');
+    res.send(audioBuffer);
+  } catch (error) {
+    console.error('TTS speak failed:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+// --- Speech-to-text (voice prompt) endpoint ---
+
+// Transcribe a recorded audio clip to text via the KoboldCpp Whisper endpoint
+app.post('/api/transcribe', protect, audioUpload.single('audio'), async (req: AuthRequest, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No audio provided' });
+  }
+
+  try {
+    // The frontend records a 16-bit 16kHz mono WAV (see WavRecorder), exactly
+    // what /api/extra/transcribe expects. Forward it base64-encoded.
+    // langcode "auto" detects the spoken language and transcribes IN it, instead
+    // of forcing English output for non-English speech.
+    const whisperResponse = await fetch(`${WHISPER_BASE_URL}/api/extra/transcribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        audio_data: req.file.buffer.toString('base64'),
+        langcode: 'auto',
+        prompt: '',
+        suppress_non_speech: false,
+      }),
+      dispatcher: slowMediaDispatcher,
+    } as RequestInit & { dispatcher: typeof slowMediaDispatcher });
+
+    if (!whisperResponse.ok) {
+      const detail = await whisperResponse.text().catch(() => '');
+      console.error('Whisper server error:', whisperResponse.status, detail);
+      return res.status(502).json({ error: 'Transcription failed' });
+    }
+
+    const data = (await whisperResponse.json()) as { text?: string };
+    res.json({ text: (data.text || '').trim() });
+  } catch (error) {
+    console.error('Transcription failed:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });

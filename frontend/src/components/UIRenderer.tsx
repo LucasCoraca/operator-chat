@@ -1,16 +1,18 @@
-import React, { Component as ReactComponent, useContext } from 'react';
+import React, { Component as ReactComponent, useContext, useEffect, useRef, useState } from 'react';
 import { Renderer } from '@openuidev/react-lang';
-import { openuiLibrary, ThemeProvider } from '@openuidev/react-ui';
+import type { ActionEvent } from '@openuidev/react-lang';
+import { ThemeProvider } from '@openuidev/react-ui';
+import { extendedLibrary } from '../openui/customComponents';
+import { UIStreamingContext } from '../openui/streamingContext';
+import { UISendToAssistantContext } from '../openui/uiActionContext';
 import '@openuidev/react-ui/defaults.css';
 import '@openuidev/react-ui/components.css';
 import './uirenderer-overrides.css';
 
-/**
- * True while the assistant message currently containing this renderer is still
- * streaming. ChatInterface provides `true` only around the in-flight reply so
- * the OpenUI renderer reveals progressively; finalized messages render at once.
- */
-export const UIStreamingContext = React.createContext(false);
+// Re-exported so existing importers (ChatInterface) keep working; the context
+// itself lives in ../openui/streamingContext to avoid a circular import with
+// customComponents (which also needs it).
+export { UIStreamingContext };
 
 interface UIRendererProps {
   /** Raw OpenUI Lang source emitted by the model (the contents of a ```ui fence). */
@@ -54,13 +56,83 @@ class ErrorBoundary extends ReactComponent<{ children: React.ReactNode; resetKey
   }
 }
 
+/** Max re-render rate while streaming (~6.5 fps). */
+const STREAM_THROTTLE_MS = 150;
+
 export function UIRenderer({ response }: UIRendererProps) {
   const isStreaming = useContext(UIStreamingContext);
+  const sendToAssistant = useContext(UISendToAssistantContext);
 
-  // OpenUI re-parses on every streamed chunk, so partial input transiently
-  // produces validation errors (mid-token cuts, not-yet-defined references)
-  // that resolve as more tokens arrive. Only surface errors once the reply has
-  // finished streaming, and log the actual messages rather than a bare array.
+  // OpenUI buttons fire host-facing actions. We must handle them or clicks do
+  // nothing: open_url opens a link; continue_conversation (the default for a
+  // button with no explicit action, i.e. @ToAssistant) sends its message back
+  // to the assistant. State actions (set/reset/run) are handled internally by
+  // the Renderer and never reach here. Ignore clicks while streaming.
+  const handleAction = (event: ActionEvent) => {
+    if (event.type === 'open_url') {
+      const url = typeof event.params?.url === 'string' ? event.params.url : undefined;
+      if (url && /^https?:\/\//i.test(url)) window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (event.type === 'continue_conversation') {
+      if (isStreaming || !sendToAssistant) return;
+      const fromParams = typeof event.params?.message === 'string' ? event.params.message : '';
+      let message = (fromParams || event.humanFriendlyMessage || '').trim();
+      // Form submits carry the entered field values; include them so the
+      // assistant sees what the user typed/selected, not just the button label.
+      const fields = event.formState
+        ? Object.entries(event.formState).filter(([, v]) => v != null && v !== '')
+        : [];
+      if (fields.length) {
+        const summary = fields
+          .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+          .join('\n');
+        message = message ? `${message}\n\n${summary}` : summary;
+      }
+      if (message) sendToAssistant(message);
+    }
+  };
+
+  // The OpenUI Renderer re-parses and re-renders the WHOLE program (including
+  // heavy SVG charts) on every change to `response`. During streaming that's a
+  // change per token — dozens of full re-renders per second of chart-heavy DOM,
+  // which can overwhelm the GPU compositor and crash the browser (notably on
+  // Wayland/NVIDIA WebRender). So while streaming we throttle the text fed to
+  // the Renderer to ~6.5 fps; once streaming ends we flush the final text
+  // immediately so nothing is dropped.
+  const [rendered, setRendered] = useState(response);
+  const latest = useRef(response);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  latest.current = response;
+
+  useEffect(() => {
+    if (!isStreaming) {
+      if (timer.current) {
+        clearTimeout(timer.current);
+        timer.current = null;
+      }
+      setRendered(response); // flush final, complete program at once
+      return;
+    }
+    // Streaming: coalesce rapid updates into one render per throttle window.
+    if (timer.current) return; // a flush is already scheduled; it'll pick up latest
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      setRendered(latest.current);
+    }, STREAM_THROTTLE_MS);
+  }, [response, isStreaming]);
+
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+
+  // OpenUI re-parses on every chunk, so partial input transiently produces
+  // validation errors (mid-token cuts, not-yet-defined references) that resolve
+  // as more tokens arrive. Only surface errors once the reply has finished
+  // streaming, and log the actual messages rather than a bare array.
   const handleError = (errors: unknown) => {
     if (isStreaming) return;
     const list = Array.isArray(errors) ? errors : errors == null ? [] : [errors];
@@ -71,12 +143,13 @@ export function UIRenderer({ response }: UIRendererProps) {
 
   return (
     <div className="openui-render-root my-3 bg-transparent">
-      <ErrorBoundary resetKey={response}>
+      <ErrorBoundary resetKey={rendered}>
         <ThemeProvider mode="dark">
           <Renderer
-            response={response}
-            library={openuiLibrary}
+            response={rendered}
+            library={extendedLibrary}
             isStreaming={isStreaming}
+            onAction={handleAction}
             onError={handleError}
           />
         </ThemeProvider>

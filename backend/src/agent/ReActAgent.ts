@@ -1011,20 +1011,36 @@ This is REQUIRED for any factual claims, statistics, news, or information obtain
 
 ` : '';
 
+    // The element rules that break most often, defined once so the SAME text can
+    // be repeated verbatim at the top and bottom of the compose prompt (primacy +
+    // recency). Keep this as the single source of truth — edit here, not inline.
+    const composeHardRules = `### Hard rules — read these first (the elements that break most often)
+1. **ONE value per argument slot — extra arguments are silently DROPPED and that text VANISHES from the page.** Every component takes a FIXED number of arguments (shown in its signature). NEVER split prose into several comma-separated strings — \`MarkDownRenderer("p1", "p2", "p3")\` is WRONG (the renderer logs \`"MarkDownRenderer takes 2 arg(s), got 3 (1 excess dropped)"\` and only the first paragraph survives). Put every paragraph into ONE string with \`\\n\\n\` between them: \`MarkDownRenderer("First.\\n\\nSecond.\\n\\nThird.")\` — or split into SEPARATE component variables listed in a parent \`Stack([...])\`.
+2. **Inside a \`\`\`ui fence, write ONLY valid openui-lang** — no markdown, prose, or JSX. Use ONLY the component names and signatures from the spec; never invent a component (there is NO \`Row\`, \`Column\`, \`Grid\`, or \`ImageGalleryImage\`) and never add extra arguments.
+3. **Markdown formatting** (\`**bold**\`, lists, \`#\` headings, links) renders ONLY inside \`MarkDownRenderer\`/\`TextContent\`. Every OTHER field is PLAIN TEXT — \`CardHeader\` title/subtitle, \`StepsItem\` titles, \`TextCallout\`, \`Tag\`, \`Button\` labels, \`Table\` column labels, \`Tabs\`/\`Accordion\` labels — so asterisks there show literally. To emphasize a short label use \`TextContent(text, "large-heavy")\`, not \`**\`.
+4. **Charts need one number per label.** In \`BarChart\`/\`LineChart\`/\`AreaChart(labels, series)\`, each \`Series\` \`values\` array length MUST equal \`labels\` length or bars/points go missing. For one value per category use a SINGLE series: \`BarChart(["EUA", "Irã", "Israel"], [Series("Perdas", [2.8, 1.45, 0.2])])\` — NOT one series per category. Use multiple series only to compare metrics across the SAME labels.
+5. **1D charts take plain NUMBERS, not objects.** \`PieChart\`/\`RadialChart\`/\`SingleStackedBarChart(labels, values)\` — e.g. \`PieChart(["Low", "Med", "High"], [4, 7, 2], "donut")\`. Aggregate list data into numbers with \`@Count(@Filter(...))\`.
+6. **Tables are COLUMN-oriented, not row-oriented.** \`Table([Col("Language", langs), Col("Users", users, "number")])\` — each \`Col\` holds its OWN data array. Pluck columns from data with \`data.rows.fieldName\`.
+7. **Forms:** define one \`FormControl\` per field as its own variable (so it streams), ALWAYS pass \`Buttons(...)\` as the 2nd \`Form\` argument, and NEVER nest a \`Form\` inside a \`Form\`.
+8. **Tabs/Accordion only switch content INSIDE their items.** Put each view in its own \`TabItem\`/\`AccordionItem\` content array: \`Tabs([TabItem("a", "Operacional", [chartA]), TabItem("b", "Perdas", [chartB])])\`. Do NOT place the charts on the page AND a separate Tabs widget beside them. When unsure, just stack sections vertically.
+9. **Layout:** \`root = Stack(...)\` is the FIRST line and every variable must be reachable from it. Stack sections vertically by default; use a 2-column \`Stack([...], "row")\` ONLY for genuinely parallel content, never more than 2 columns, and never leave a near-empty column.
+10. **Media:** embed \`Image(alt, src)\` or \`Video(src)\` ONLY with REAL URLs you actually saw in research — never invent one (fabricated URLs render broken). Judge an image only by its description; skip generic/unrelated/"(no description)" ones. For multiple images use a \`Stack\` of \`Image\`, NOT \`ImageGallery\`.`;
+
     const visualizationSection = this.currentMode === 'compose_reply_mode' ? `
 
 ## RESPONSE FORMAT — COMPOSE YOUR REPLY AS A UI
+
+${composeHardRules}
+
 Your replies are rendered in a graphical interface, not a plain text console. **openui-lang is your PRIMARY response format — strongly prefer it over raw text.** Compose your answer AS an interface: a fenced \`\`\`ui code block containing an openui-lang program that lays out your whole response. It renders live, streaming progressively as you write it.
 
 This includes your TEXT. openui-lang has text components, so put your prose INSIDE the UI rather than writing plain markdown:
-- \`MarkDownRenderer(text)\` — multi-paragraph explanations and markdown text.
+- \`MarkDownRenderer(text)\` — multi-paragraph explanations and markdown text. It takes exactly ONE string argument: put ALL paragraphs into that single string with literal \`\\n\\n\` between them. NEVER write paragraphs as separate comma-separated arguments — \`MarkDownRenderer("p1", "p2", "p3")\` is WRONG and the extra paragraphs are silently dropped.
 - \`TextContent(text, size?)\` — shorter text, headings, labels (sizes: "small" | "default" | "large" | "small-heavy" | "large-heavy").
 - \`Callout\` / \`TextCallout\` — highlight key points, tips, warnings.
 Then structure and enrich with the rest of the catalog: \`Card\`/\`CardHeader\` for sections, \`BarChart\`/\`LineChart\`/\`PieChart\` + \`Table\` for data, \`Steps\` for processes, \`Tabs\`/\`Accordion\` to organize, \`Tag\`/\`TagBlock\` for labels, \`Image\` for visuals, \`Video\` to embed videos.
 
 If your research gathered relevant video links (e.g. YouTube URLs from web_search), embed them inline with the \`Video\` component so the user can watch them right here — don't just paste the raw link as text. Only use real URLs you actually found; never invent one.
-
-**Markdown (\`**bold**\`, \`*italic*\`, \`[links](url)\`, \`#\` headings, lists) ONLY renders inside \`MarkDownRenderer\` and \`TextContent\`.** Every other field is PLAIN TEXT — CardHeader title/subtitle, StepsItem titles, Tag, TextCallout, Button labels, Table column labels, Tabs/Accordion labels. If you write \`**Mussafah 2**\` in one of those, the asterisks show literally (no bold). So: only put markdown in \`MarkDownRenderer\`/\`TextContent\`; to emphasize a short standalone label, use \`TextContent(text, "large-heavy")\` or \`"small-heavy"\` instead of \`**\`.
 
 **Default: wrap essentially every substantive answer in a \`\`\`ui block** — explanations, summaries, comparisons, lists, guides, and data alike. A well-composed UI is clearer and more pleasant than a wall of text. Only answer in plain prose (no \`\`\`ui block) for trivial conversational turns: a one-line reply, an acknowledgment, or a clarifying question. When unsure, use openui-lang.
 
@@ -1049,18 +1065,8 @@ chart = BarChart(["No cache", "Cold cache", "Warm cache"], [latency])
 latency = Series("Latency (ms)", [240, 180, 12])
 \`\`\`
 
-### Layout & media guidance
-- **Illustrate with media to explain.** A relevant image, diagram, or short video makes a concept concrete far better than text alone. If, while researching, you came across image URLs or YouTube videos relevant to the topic, embed them: \`Image(alt, src)\`/\`ImageBlock(src, alt)\` for a picture or diagram, \`Video\` for a YouTube clip. Place media right next to the text it illustrates.
-- **For multiple images, use a \`Stack\` of \`Image(alt, src)\` — do NOT use \`ImageGallery\`.** ImageGallery takes an array of plain objects (\`[{src, alt}]\`), which is easy to get wrong, and there is NO \`ImageGalleryImage\` (or similar) component — inventing one makes the images disappear. A \`Stack([img1, img2], "row")\` of \`Image\` components is reliable. Example: \`gallery = Stack([i1, i2], "row")\` / \`i1 = Image("Tehran skyline", "https://…/a.jpg")\`.
-- **You cannot see images — judge each one ONLY by its description.** The research results list images with their alt text/caption (e.g. under "Images on this page"). Embed an image ONLY when that description is plainly about the subject of your answer. If the description is generic, unrelated, or marked "(no description)", DO NOT use it — you have no way to know what it shows. Example: writing about Iran's politics, an image described "modern house with garden" or "stock photo" is clearly unrelated — never include it.
-- **No image is far better than a wrong image.** A random or decorative image makes the reply look broken and untrustworthy. When in doubt, omit the image and rely on text, charts, or a clearly-relevant YouTube video instead. Quality over quantity: one on-topic image beats three uncertain ones.
-- **Media needs REAL URLs you actually saw** during research. NEVER invent, guess, or construct a media URL — a fabricated URL renders broken. Copy the URL verbatim from the research results.
-- **Featured media goes full width.** Give a hero \`Video\` or a key \`Image\` its own full-width row (a child of the root \`Stack\`), NOT a narrow side column. A video squeezed into one half of a two-column row is too small to watch.
-- **Only use multi-column rows (\`Stack([...], "row")\`) when every column has comparable content, and keep it to 2 columns.** Replies render in a narrow column, so 3–4 side-by-side columns get crushed. Never create a column you can't fill — an empty or near-empty column looks broken. If you have content for only one side, use a single full-width column.
-- Stack sections vertically by default; reach for a row only for genuinely parallel content (e.g. 2 comparable cards or a side-by-side comparison).
-- **Tabs only switch content that lives INSIDE them.** If you want clickable tabs to flip between charts/views, each chart MUST be inside its own \`TabItem\`'s content: \`Tabs([TabItem("a", "Operacional", [chartA]), TabItem("b", "Perdas", [chartB])])\`. NEVER stack the charts in the page AND add a separate Tabs widget beside them — the tabs won't control charts that aren't inside them, which looks broken. Pick ONE: stack the charts vertically (all visible at once — usually clearest for comparison), OR put each chart inside a tab (one visible at a time). When in doubt, just stack them; don't add tabs.
-- **Chart data must be complete or bars/points go missing.** In \`BarChart\`/\`LineChart\`/\`AreaChart(labels, series)\`, \`labels\` are the x-axis categories and EACH \`Series\` must hold exactly one number per label — its \`values\` array length MUST equal \`labels\` length. For a simple "one value per category" chart, use a SINGLE series: \`BarChart(["EUA", "Irã", "Israel"], [Series("Perdas", [2.8, 1.45, 0.2])])\` — do NOT make one series per category (that puts every bar under the first label and leaves the rest empty). Use multiple series ONLY to compare metrics across the SAME labels, giving each series the same number of values as there are labels.
-- **Match each component's argument count EXACTLY — extra args break the component or get dropped.** Pass only the arguments in the signature, in order: e.g. \`MarkDownRenderer(textMarkdown, variant?)\` takes just the text (plus optional variant) — never more; \`TextContent(text, size?)\` takes at most 2; \`SwitchItem(label?, description?, name, defaultChecked?)\` takes 4. Never invent component names and never tack on extra arguments — if you need more structure, nest more components instead.
+### Before you finish — re-check these (same rules as above; these break the render most often)
+${composeHardRules}
 ` : '';
 
     return `Knowledge Cutoff: December 2023

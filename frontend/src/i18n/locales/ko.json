@@ -106,7 +106,17 @@
     "reasoningEffort": "추론 노력",
     "reasoningEffortLow": "낮음",
     "reasoningEffortMedium": "보통",
-    "reasoningEffortHigh": "높음"
+    "reasoningEffortHigh": "높음",
+    "play": "재생",
+    "pause": "일시정지",
+    "resumeAudio": "다시 재생",
+    "generatingAudio": "생성 중…",
+    "audioFailed": "오디오를 생성할 수 없습니다. 음성 서버를 사용할 수 없을 수 있습니다.",
+    "recordVoice": "음성 프롬프트 녹음",
+    "stopRecording": "중지 후 변환",
+    "transcribing": "변환 중…",
+    "transcribeFailed": "오디오를 변환할 수 없습니다. 음성 서버를 사용할 수 없을 수 있습니다.",
+    "micUnavailable": "마이크를 사용할 수 없습니다. 권한과 페이지가 HTTPS 또는 localhost로 제공되는지 확인하세요."
   },
   "settings": {
     "title": "설정",
@@ -136,7 +146,16 @@
     "mcpServer": "MCP 서버 (곧 출시)",
     "mcpServerDescription": "MCP 서버 통합은 향후 업데이트에서 사용할 수 있습니다.",
     "language": "언어",
-    "languageDescription": "선호하는 언어를 선택하세요"
+    "languageDescription": "선호하는 언어를 선택하세요",
+    "voice": "음성",
+    "voiceTagline": "텍스트 음성 변환",
+    "voiceDescription": "답변을 소리내어 재생합니다. 음성을 선택하고 선택적으로 말하기 스타일을 설명할 수 있습니다.",
+    "voicePreset": "음성",
+    "voicePresetHint": "음성 답변에 사용할 사전 설정 음성을 선택하세요.",
+    "voiceInstruction": "스타일 지시",
+    "voiceInstructionHint": "선택 사항. 음성이 어떻게 들려야 하는지 설명하세요. 사용자 지정 가능한 음성에만 적용됩니다.",
+    "voiceInstructionPlaceholder": "예: 영국식 억양의 친근한 여성",
+    "voicesLoadError": "음성을 불러오지 못했습니다. 음성 서버를 사용할 수 없을 수 있습니다."
   },
   "personality": {
     "managePersonalities": "성격 관리",

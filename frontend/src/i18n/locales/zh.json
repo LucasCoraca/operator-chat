@@ -106,7 +106,17 @@
     "reasoningEffort": "推理努力",
     "reasoningEffortLow": "低",
     "reasoningEffortMedium": "中",
-    "reasoningEffortHigh": "高"
+    "reasoningEffortHigh": "高",
+    "play": "播放",
+    "pause": "暂停",
+    "resumeAudio": "继续",
+    "generatingAudio": "生成中…",
+    "audioFailed": "无法生成音频。语音服务器可能不可用。",
+    "recordVoice": "录制语音提示",
+    "stopRecording": "停止并转写",
+    "transcribing": "转写中…",
+    "transcribeFailed": "无法转写音频。语音服务器可能不可用。",
+    "micUnavailable": "麦克风不可用。请检查权限，并确保页面通过 HTTPS 或 localhost 提供。"
   },
   "settings": {
     "title": "设置",
@@ -136,7 +146,16 @@
     "mcpServer": "MCP 服务器（即将推出）",
     "mcpServerDescription": "MCP 服务器集成将在未来更新中提供。",
     "language": "语言",
-    "languageDescription": "选择您的首选语言"
+    "languageDescription": "选择您的首选语言",
+    "voice": "语音",
+    "voiceTagline": "文字转语音",
+    "voiceDescription": "朗读回复。选择一个语音，并可选择描述说话风格。",
+    "voicePreset": "语音",
+    "voicePresetHint": "为语音回复选择一个预设语音。",
+    "voiceInstruction": "风格说明",
+    "voiceInstructionHint": "可选。描述语音应有的声音效果。仅适用于可自定义的语音。",
+    "voiceInstructionPlaceholder": "例如：带英国口音的友善女性",
+    "voicesLoadError": "无法加载语音。语音服务器可能不可用。"
   },
   "personality": {
     "managePersonalities": "管理人格",

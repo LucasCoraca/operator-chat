@@ -106,7 +106,17 @@
     "reasoningEffort": "Denkaufwand",
     "reasoningEffortLow": "Niedrig",
     "reasoningEffortMedium": "Mittel",
-    "reasoningEffortHigh": "Hoch"
+    "reasoningEffortHigh": "Hoch",
+    "play": "Abspielen",
+    "pause": "Pause",
+    "resumeAudio": "Fortsetzen",
+    "generatingAudio": "Wird erstellt…",
+    "audioFailed": "Audio konnte nicht erzeugt werden. Der Sprachserver ist möglicherweise nicht erreichbar.",
+    "recordVoice": "Sprachnachricht aufnehmen",
+    "stopRecording": "Stoppen & transkribieren",
+    "transcribing": "Transkribiere…",
+    "transcribeFailed": "Audio konnte nicht transkribiert werden. Der Sprachserver ist möglicherweise nicht erreichbar.",
+    "micUnavailable": "Mikrofon nicht verfügbar. Prüfe die Berechtigungen und dass die Seite über HTTPS oder localhost ausgeliefert wird."
   },
   "settings": {
     "title": "Einstellungen",
@@ -136,7 +146,16 @@
     "mcpServer": "MCP-Server (Demnächst)",
     "mcpServerDescription": "MCP-Server-Integration wird in einem zukünftigen Update verfügbar sein.",
     "language": "Sprache",
-    "languageDescription": "Wählen Sie Ihre bevorzugte Sprache"
+    "languageDescription": "Wählen Sie Ihre bevorzugte Sprache",
+    "voice": "Stimme",
+    "voiceTagline": "Text-zu-Sprache",
+    "voiceDescription": "Antworten vorlesen lassen. Wähle eine Stimme und beschreibe optional einen Sprechstil.",
+    "voicePreset": "Stimme",
+    "voicePresetHint": "Wähle eine voreingestellte Stimme für gesprochene Antworten.",
+    "voiceInstruction": "Stilanweisung",
+    "voiceInstructionHint": "Optional. Beschreibe, wie die Stimme klingen soll. Gilt nur für anpassbare Stimmen.",
+    "voiceInstructionPlaceholder": "z. B. Freundliche Frau mit britischem Akzent",
+    "voicesLoadError": "Stimmen konnten nicht geladen werden. Der Sprachserver ist möglicherweise nicht verfügbar."
   },
   "personality": {
     "managePersonalities": "Persönlichkeiten verwalten",

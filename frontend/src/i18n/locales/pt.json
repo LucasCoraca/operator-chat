@@ -106,7 +106,17 @@
     "reasoningEffort": "Esforço de raciocínio",
     "reasoningEffortLow": "Baixo",
     "reasoningEffortMedium": "Médio",
-    "reasoningEffortHigh": "Alto"
+    "reasoningEffortHigh": "Alto",
+    "play": "Reproduzir",
+    "pause": "Pausar",
+    "resumeAudio": "Retomar",
+    "generatingAudio": "Gerando…",
+    "audioFailed": "Não foi possível gerar o áudio. O servidor de voz pode estar indisponível.",
+    "recordVoice": "Gravar prompt de voz",
+    "stopRecording": "Parar e transcrever",
+    "transcribing": "Transcrevendo…",
+    "transcribeFailed": "Não foi possível transcrever o áudio. O servidor de fala pode estar indisponível.",
+    "micUnavailable": "Microfone indisponível. Verifique as permissões e se a página é servida via HTTPS ou localhost."
   },
   "settings": {
     "title": "Configurações",
@@ -136,7 +146,16 @@
     "mcpServer": "Servidor MCP (Em breve)",
     "mcpServerDescription": "A integração do servidor MCP estará disponível em uma atualização futura.",
     "language": "Idioma",
-    "languageDescription": "Selecione seu idioma preferido"
+    "languageDescription": "Selecione seu idioma preferido",
+    "voice": "Voz",
+    "voiceTagline": "Conversão de texto em fala",
+    "voiceDescription": "Reproduza as respostas em voz alta. Escolha uma voz e, opcionalmente, descreva um estilo de fala.",
+    "voicePreset": "Voz",
+    "voicePresetHint": "Escolha uma voz predefinida para as respostas faladas.",
+    "voiceInstruction": "Instrução de estilo",
+    "voiceInstructionHint": "Opcional. Descreva como a voz deve soar. Aplica-se apenas a vozes personalizáveis.",
+    "voiceInstructionPlaceholder": "ex.: Mulher simpática com sotaque britânico",
+    "voicesLoadError": "Não foi possível carregar as vozes. O servidor de voz pode estar indisponível."
   },
   "personality": {
     "managePersonalities": "Gerenciar personalidades",

@@ -18,6 +18,13 @@ export interface BrowserContent {
   sectionEnd?: number;
 }
 
+/** A real image found on a page, surfaced so the (text-only) model can cite its URL. */
+export interface ExtractedImage {
+  url: string;
+  alt: string;
+  context: string;
+}
+
 export interface BrowserPageCache {
   url: string;
   title: string;
@@ -25,6 +32,7 @@ export interface BrowserPageCache {
   wordCount: number;
   tokenCount: number;
   headings: Array<{ level: number; text: string; charStart: number; charEnd: number }>;
+  images: ExtractedImage[];
   loadedAt: Date;
 }
 
@@ -231,6 +239,16 @@ export class BrowserClient {
       result += `${markers} ${heading.text} (chars ${heading.charStart}-${heading.charEnd})\n`;
     }
 
+    if (content.images && content.images.length > 0) {
+      result += `\n## Images on this page\n\n`;
+      result += `Real image URLs from this page — usable verbatim in a reply (Image/ImageBlock/ImageGallery). The description is the image's alt text or caption.\n\n`;
+      content.images.forEach((im, i) => {
+        const desc = im.alt || im.context || '(no description)';
+        const extra = im.context && im.context !== im.alt ? ` — ${im.context}` : '';
+        result += `${i + 1}. ${desc}${extra}\n   ${im.url}\n`;
+      });
+    }
+
     return {
       title: content.title,
       url: content.url,
@@ -320,6 +338,11 @@ export class BrowserClient {
     // Extract headings with character positions
     const headings = this.extractHeadings(markdown);
 
+    // Extract a curated list of real images (absolute URLs + alt/context). The
+    // model is text-only and can't see images, so this gives it usable URLs to
+    // cite when composing a reply with visuals.
+    const images = await this.extractImages(page, url);
+
     return {
       url,
       title,
@@ -327,8 +350,62 @@ export class BrowserClient {
       wordCount,
       tokenCount,
       headings,
+      images,
       loadedAt: new Date(),
     };
+  }
+
+  /**
+   * Collect meaningful images from the page: absolute URL, alt text, and any
+   * caption/title context. Filters out icons, logos, spacers and tracking
+   * pixels, dedupes, and caps the list so it stays a useful menu rather than
+   * noise. Runs in-page so it sees resolved (currentSrc) and loaded dimensions.
+   */
+  private async extractImages(page: Page, pageUrl: string): Promise<ExtractedImage[]> {
+    try {
+      const raw = await page.evaluate(() => {
+        const items: { url: string; alt: string; context: string; w: number; h: number }[] = [];
+        const imgs = Array.from(document.querySelectorAll('img')) as HTMLImageElement[];
+        for (const el of imgs) {
+          const url = el.currentSrc || el.src || '';
+          if (!url) continue;
+          const alt = (el.getAttribute('alt') || '').trim();
+          let context = '';
+          const fig = el.closest('figure');
+          const cap = fig ? fig.querySelector('figcaption') : null;
+          if (cap && cap.textContent) context = cap.textContent.trim();
+          if (!context) context = (el.getAttribute('title') || el.getAttribute('aria-label') || '').trim();
+          items.push({ url, alt, context, w: el.naturalWidth || 0, h: el.naturalHeight || 0 });
+        }
+        return items;
+      });
+
+      const seen = new Set<string>();
+      const out: ExtractedImage[] = [];
+      for (const im of raw) {
+        let abs: string;
+        try {
+          abs = new URL(im.url, pageUrl).toString();
+        } catch {
+          continue;
+        }
+        if (!/^https?:\/\//i.test(abs)) continue; // skip data:/blob:
+        if (im.w && im.h && (im.w < 150 || im.h < 100)) continue; // icons/spacers/thin bars
+        if (/sprite|logo|icon|favicon|avatar|spacer|pixel|1x1|tracking|beacon|blank\./i.test(abs)) continue;
+        // Require a description: the model is text-only and can't judge an image
+        // with no alt/caption, so offering undescribed ones just invites random,
+        // irrelevant picks. Skip them entirely.
+        if (!im.alt && !im.context) continue;
+        const key = abs.split('#')[0];
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ url: abs, alt: im.alt, context: im.context });
+        if (out.length >= 12) break;
+      }
+      return out;
+    } catch {
+      return [];
+    }
   }
 
   /**

@@ -43,3 +43,49 @@
     flex-wrap: wrap !important;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Desktop multi-column reflow.
+ *
+ * The chat message column is capped (~768px), so when the model lays out a
+ * dashboard as a row of 3–4 columns, each column gets crushed to ~150px — the
+ * chart squishes and text wraps one word per line. The model doesn't reliably
+ * limit its column count, so we reflow here: a row with 3+ children wraps and
+ * each child keeps a readable minimum width, so 4 tiny slivers become a clean
+ * 2-per-row grid instead. Two-child rows (label:value, icon+text) are left
+ * alone. Mirrors the mobile rule above but for wider viewports.
+ * --------------------------------------------------------------------------- */
+@media (min-width: 641px) {
+  .openui-render-root div[style*="flex-direction: row"]:has(> :nth-child(3)) {
+    flex-wrap: wrap !important;
+  }
+  .openui-render-root div[style*="flex-direction: row"]:has(> :nth-child(3)) > * {
+    flex: 1 1 280px !important;
+    min-width: 260px !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Media polish.
+ *
+ * OpenUI's ImageBlock frames the image in a fixed 240px-tall box with a blurred
+ * backdrop, and the image only fills height (not width) — so landscape images
+ * leave the blurred backdrop showing as side "letterbox" bars. Force the image
+ * to cover the full frame so it reads as a clean photo, and give featured media
+ * a bit more height on wider screens.
+ * --------------------------------------------------------------------------- */
+.openui-render-root .openui-image-block-image {
+  width: 100% !important;
+  object-fit: cover !important;
+}
+
+@media (min-width: 641px) {
+  .openui-render-root .openui-image-block-wrapper {
+    max-height: 340px !important;
+  }
+}
+
+/* Plain Image components: keep them responsive and tidy. */
+.openui-render-root .openui-image {
+  max-width: 100%;
+}

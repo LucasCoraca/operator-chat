@@ -15,11 +15,40 @@
 // ReActAgent supplies its own framing around this fragment.
 
 import { openuiLibrary, openuiPromptOptions } from '@openuidev/react-ui';
+import { createLibrary, defineComponent } from '@openuidev/react-lang';
+import { z } from 'zod/v4';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Custom components we register on top of the built-in OpenUI library. These
+// are prompt-only stand-ins (component: () => null) — the REAL render logic
+// lives in frontend/src/openui/customComponents.tsx. Keep each component's
+// name / props schema / description identical in both files so what the model
+// is told matches what the renderer accepts.
+const Video = defineComponent({
+  name: 'Video',
+  props: z.object({
+    src: z.string(),
+    title: z.string().optional(),
+  }),
+  description:
+    'Embed a video. src must be a YouTube URL (youtube.com/watch?v=…, youtu.be/…, /embed/…, or /shorts/…) to render an inline player; any other URL renders an "Open video" link button. title is optional caption/aria text. Only use real video URLs you actually have (e.g. from search results) — never invent one.',
+  component: () => null,
+});
+
+// Mirror the extendedLibrary built in customComponents.tsx: every built-in
+// component + our custom ones, with Video listed in the "Content" group.
+const componentGroups = (openuiLibrary.componentGroups ?? []).map((g) =>
+  g.name === 'Content' ? { ...g, components: [...g.components, 'Video'] } : g,
+);
+const library = createLibrary({
+  root: openuiLibrary.root,
+  componentGroups,
+  components: [...Object.values(openuiLibrary.components), Video],
+});
 
 // Use the library's own canonical prompt generator. It emits the COMPLETE
 // official OpenUI Lang prompt — every component signature plus the "## Examples"
@@ -27,7 +56,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // "row"/"column" direction rather than inventing Row/Column). Passing
 // openuiPromptOptions includes OpenUI's curated examples and additional rules.
 // (generatePrompt(library.toSpec(...)) drops examples — do not use it here.)
-const full = openuiLibrary.prompt(openuiPromptOptions);
+const full = library.prompt(openuiPromptOptions);
 
 // Keep everything from the first "## Syntax Rules" header onward, dropping the
 // standalone-response intro that contradicts our fenced-block usage.

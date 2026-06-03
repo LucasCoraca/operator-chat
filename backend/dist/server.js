@@ -10,10 +10,12 @@ const http_1 = require("http");
 const crypto_1 = __importDefault(require("crypto"));
 const multer_1 = __importDefault(require("multer"));
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
+const undici_1 = require("undici");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
 const llamaClient_1 = require("./services/llamaClient");
 const searxngClient_1 = require("./services/searxngClient");
+const imageProxy_1 = require("./services/imageProxy");
 const sandboxManager_1 = require("./services/sandboxManager");
 const memoryManager_1 = require("./services/memoryManager");
 const mcpClientManager_1 = require("./services/mcpClientManager");
@@ -28,6 +30,8 @@ const schedule_1 = require("./services/schedule");
 const sshAgentRunner_1 = require("./agent/v2/sshAgentRunner");
 const outputCap_1 = require("./agent/v2/outputCap");
 const ids_1 = require("./agent/v2/ids");
+const message_1 = require("./agent/v2/message");
+const partProjection_1 = require("./agent/v2/partProjection");
 // JWT secret for socket.io
 const JWT_SECRET = process.env.JWT_SECRET || 'operator-chat-secret-key-12345';
 const app = (0, express_1.default)();
@@ -75,6 +79,35 @@ const upload = (0, multer_1.default)({
         fileSize: 50 * 1024 * 1024, // 50MB limit
     },
 });
+// KoboldCpp serves both text-to-speech (/api/extra/tts) and Whisper speech-to-text
+// (/api/extra/transcribe) from a single host. TTS_BASE_URL / WHISPER_BASE_URL can
+// still override each independently, otherwise both fall back to KCPP_BASE_URL.
+const KCPP_BASE_URL = process.env.KCPP_BASE_URL || 'http://192.168.15.126:5001';
+const TTS_BASE_URL = process.env.TTS_BASE_URL || KCPP_BASE_URL;
+// TTS/Whisper run on CPU and can take several minutes to synthesize or transcribe
+// a longer clip. Node's global fetch (undici) aborts with UND_ERR_HEADERS_TIMEOUT
+// after ~5 min by default, which killed longer TTS scripts mid-synthesis. This
+// dispatcher disables the headers/body timeouts so those slow-but-legitimate
+// requests can finish (connect still times out fast so a truly-down server fails
+// quickly).
+const slowMediaDispatcher = new undici_1.Agent({
+    headersTimeout: 0,
+    bodyTimeout: 0,
+    connectTimeout: 10_000,
+});
+// Default TTS preset used when a user hasn't picked one. Must be a valid entry
+// from GET /api/extra/speakers_list (presets: kobo cheery sleepy shouty chatty
+// random instruct, plus any WAV files in the server's --ttsdir).
+const DEFAULT_TTS_VOICE = process.env.TTS_DEFAULT_VOICE || 'kobo';
+// Speech-to-text (Whisper) server for voice prompts. Recorded audio is held in
+// memory and forwarded to Whisper as base64; nothing is persisted to disk.
+const WHISPER_BASE_URL = process.env.WHISPER_BASE_URL || KCPP_BASE_URL;
+const audioUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: {
+        fileSize: 25 * 1024 * 1024, // 25MB limit
+    },
+});
 function shellQuote(value) {
     return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
@@ -82,6 +115,7 @@ function shellQuote(value) {
 const defaultSettings = {
     llama: {
         baseUrl: process.env.LLAMA_BASE_URL || 'http://localhost:8080',
+        apiKey: process.env.LLAMA_API_KEY || undefined,
     },
     searxng: {
         baseUrl: process.env.SEARXNG_BASE_URL || 'http://localhost:8080',
@@ -92,6 +126,8 @@ const defaultSettings = {
         selectedPersonality: 'professional',
         selectedModel: undefined,
         defaultToolPreferences: {},
+        voicePreset: DEFAULT_TTS_VOICE,
+        voiceInstruction: '',
     },
     mcpServers: {},
     remoteWorkspace: {
@@ -516,6 +552,23 @@ function normalizePersistedAgentRun(run) {
         error: run.error || 'Agent run was interrupted by a server restart.',
     };
 }
+// After a server restart there can never be an in-flight ReAct agent — the
+// process that owned the loop is gone. Persisted state with `isComplete: false`
+// would otherwise make the join-chat handler emit an `agent-state` event that
+// pushes the UI into a stuck "still running" mode where stop/edit/retry all
+// no-op. Force-flip incomplete states to complete on load so the persisted
+// view matches reality.
+function normalizePersistedAgentState(agentState) {
+    if (!agentState)
+        return agentState;
+    if (agentState.isComplete)
+        return agentState;
+    return {
+        ...agentState,
+        isComplete: true,
+        partialFinalAnswer: undefined,
+    };
+}
 function latestIsoDate(values) {
     let latestTime = Number.NEGATIVE_INFINITY;
     let latestValue;
@@ -593,7 +646,10 @@ async function loadChats() {
             const result = await repositories_1.chatRepository.getWithMessages(chat.id);
             if (result) {
                 const { chat: persistedChat, messages } = result;
-                const persistedAgentState = sanitizeAgentStateForPersistence(persistedChat.agent_state);
+                const sanitizedAgentState = sanitizeAgentStateForPersistence(persistedChat.agent_state);
+                const persistedAgentState = normalizePersistedAgentState(sanitizedAgentState);
+                const agentStateNormalized = sanitizedAgentState !== undefined &&
+                    persistedAgentState !== sanitizedAgentState;
                 const parsedPersistedAgentState = parseJsonIfNeeded(persistedChat.agent_state);
                 const persistedAgentRuns = sanitizeAgentRunsForPersistence(parsedPersistedAgentState?.agentRuns)
                     .map(normalizePersistedAgentRun);
@@ -649,7 +705,7 @@ async function loadChats() {
                 };
                 const sessionChanged = normalizeChatSession(session);
                 chatSessions.set(persistedChat.id, session);
-                if (sessionChanged || restoredMessagesChanged) {
+                if (sessionChanged || restoredMessagesChanged || agentStateNormalized) {
                     await saveChat(session, { touchUpdatedAt: false });
                 }
             }
@@ -848,6 +904,36 @@ async function getSelectedPersonality(userId, uiSettings) {
         systemPrompt: dbPersonality.system_prompt,
         isCustom: dbPersonality.is_custom,
     };
+}
+// Condense an assistant reply into a short spoken-word script for text-to-speech,
+// keeping the voice/tone of the user's selected personality.
+async function generateTtsScript(text, personality, model, userPrompt) {
+    const personaLine = personality
+        ? `Speak in the voice, tone and personality described here:\n${personality.systemPrompt}\n\n`
+        : '';
+    const systemPrompt = `You turn an assistant chat reply into a spoken-word script for a text-to-speech voice.
+${personaLine}Rules:
+- Cover all the important points of the reply — the key facts, steps, names, numbers and conclusions. Do not drop substantive details; this is a faithful spoken version, not a teaser.
+- Aim for roughly 120-220 words (longer is fine if the reply is dense; only be brief if the reply itself is brief).
+- Lead with the takeaway, then walk through the supporting details in a logical order.
+- Use natural, conversational spoken language; turn lists and tables into flowing sentences.
+- No markdown, no code, no URLs, no emojis, no bullet lists, no headings.
+- Do not add greetings or sign-offs unless the personality clearly calls for it.
+- Output ONLY the spoken script, nothing else.`;
+    // Give the model the user's question for context so the summary stays on point,
+    // but only the assistant reply should be condensed into speech.
+    const userMessage = userPrompt && userPrompt.trim()
+        ? `The user asked:\n"""\n${userPrompt.trim()}\n"""\n\nThe assistant replied:\n"""\n${text}\n"""\n\nWrite the spoken script that conveys the assistant's reply in full, keeping all the important details.`
+        : text;
+    const response = await llamaClient.chat([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userMessage },
+    ], { temperature: 0.7, maxTokens: 700, excludeReasoning: true, model });
+    const script = (response.content || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .trim();
+    // Fall back to a trimmed slice of the original if the model returns nothing usable.
+    return script || text.replace(/\s+/g, ' ').trim().slice(0, 400);
 }
 function serializeTask(task) {
     return {
@@ -1219,7 +1305,7 @@ function buildAgentLedger(session, activeRunId) {
                     if (filePath)
                         reads.set(filePath, `read in ${run.title}`);
                 }
-                if (step.actionName === 'bash') {
+                if (step.actionName === 'bash' || step.actionName === 'shell') {
                     const command = String(step.actionArgs?.command || '');
                     if (command)
                         commands.push(`${run.title}: ${truncateForAgentContext(command, 300)}`);
@@ -1262,6 +1348,16 @@ function buildSharedAgentContext(session, activeRunId) {
     }).join('\n\n');
     if (recentTrace) {
         sections.push(`## Recent Agent Trace\n${recentTrace}`);
+    }
+    // Surface the SSH agent's final-answer text per run. The trace projection
+    // intentionally stores it outside `run.steps` (it goes to the chat bubble),
+    // so without this block the chat ReAct never sees the agent's actual
+    // conclusion — only that some commands ran and files moved.
+    const conclusions = recentRuns
+        .filter((run) => run.id !== activeRunId && run.finalAnswer && run.finalAnswer.trim())
+        .map((run) => `### ${run.title} (${run.status})\n${truncateForAgentContext(run.finalAnswer.trim(), 2000)}`);
+    if (conclusions.length > 0) {
+        sections.push(`## Recent Agent Conclusions\n${conclusions.join('\n\n')}`);
     }
     return sections.join('\n\n');
 }
@@ -1354,6 +1450,132 @@ function startTaskScheduler() {
     }, 30000);
     pollScheduledTasks().catch(console.error);
 }
+// Build the SshAgentRunner with the standard host-side wiring (socket events,
+// approval gate, question/launch bridges) and start it asynchronously. Used by
+// both `startChatAgentRun` (fresh run) and `resumeAgentRun` (existing
+// agent_session). The IIFE returns immediately; the runner runs in the
+// background until it completes, errors, or is cancelled.
+function spawnAndRunSshAgentRunner(args) {
+    const { session, run, agentSession, userId, workspace, language, sourceSocketChatId, agentModel, agentPrompt, workspaceRoot, contextWindowTokens, reservedOutputTokens, autoCompactThreshold, } = args;
+    const runner = new sshAgentRunner_1.SshAgentRunner(llamaClient, repositories_1.agentSessionRepository, repositories_1.agentRunTaskRepository, {
+        sessionId: agentSession.id,
+        chatId: session.id,
+        agentRunId: run.id,
+        userId,
+        sandboxId: session.sandboxId,
+        agent: 'ssh-agent',
+        workspace,
+        agentPrompt,
+        modelID: agentModel,
+        providerID: 'llama',
+        cwd: workspaceRoot,
+        root: workspaceRoot,
+        language,
+        contextWindowTokens,
+        reservedOutputTokens,
+        autoCompactThreshold,
+    }, {
+        onPartsUpdated: (steps, finalAnswer) => {
+            run.steps = steps;
+            run.finalAnswer = finalAnswer;
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            scheduleChatSave(session);
+        },
+        onStep: () => { },
+        onAssistantToken: () => { },
+        onTimings: (timings) => {
+            io.to(sourceSocketChatId).emit('timings', timings);
+        },
+        onToolApprovalRequest: async (approvalRequest) => {
+            const latestSettings = await getUserSettings(userId);
+            if (latestSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
+                return { approved: true, reason: 'approved' };
+            }
+            return await new Promise((resolve) => {
+                pendingApprovals.set(approvalRequest.approvalId, {
+                    chatId: sourceSocketChatId,
+                    request: approvalRequest,
+                    resolve,
+                });
+                io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
+            });
+        },
+        onTasksUpdated: (chatId, agentRunId, tasks) => {
+            io.to(sourceSocketChatId).emit('agent-tasks-updated', { chatId, agentRunId, tasks });
+        },
+        onWorkspaceChanged: (hint) => {
+            io.to(userId).emit('remote-workspace-changed', hint);
+        },
+        onAskUserQuestion: async (request) => {
+            return await new Promise((resolve) => {
+                const payload = {
+                    chatId: sourceSocketChatId,
+                    agentRunId: run.id,
+                    questionId: request.questionId,
+                    question: request.question,
+                    options: request.options ?? [],
+                    multiple: Boolean(request.multiple),
+                    allowCustomAnswer: Boolean(request.allowCustomAnswer),
+                    timeoutMs: request.timeoutMs,
+                };
+                pendingQuestions.set(request.questionId, { payload, resolve });
+                io.to(sourceSocketChatId).emit('agent-question-required', payload);
+                if (request.timeoutMs && request.timeoutMs > 0) {
+                    setTimeout(() => {
+                        if (pendingQuestions.has(request.questionId)) {
+                            pendingQuestions.delete(request.questionId);
+                            resolve({ answer: '', answered: false });
+                            io.to(sourceSocketChatId).emit('agent-question-resolved', {
+                                chatId: sourceSocketChatId,
+                                agentRunId: run.id,
+                                questionId: request.questionId,
+                            });
+                        }
+                    }, request.timeoutMs);
+                }
+            });
+        },
+        onComplete: (finalAnswer) => {
+            run.finalAnswer = finalAnswer ?? run.finalAnswer ?? null;
+            run.status = run.status === 'cancelled' ? 'cancelled' : 'completed';
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            void flushScheduledChatSave(session).catch(console.error);
+        },
+        onError: (error) => {
+            if (run.status !== 'cancelled') {
+                run.status = 'failed';
+                run.error = error;
+            }
+            run.updatedAt = new Date().toISOString();
+            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
+            void flushScheduledChatSave(session).catch(console.error);
+        },
+    });
+    runningAgentRuns.set(run.id, {
+        kind: 'ssh-v2',
+        agent: runner,
+        session,
+        run,
+        sourceSocketChatId,
+        sessionId: agentSession.id,
+    });
+    console.log(`[sshAgent] Starting runner for run ${run.id} (session ${agentSession.id})`);
+    void (async () => {
+        try {
+            await runner.run();
+        }
+        catch (error) {
+            console.error(`[sshAgent] runner error for run ${run.id}:`, error);
+        }
+        finally {
+            runningAgentRuns.delete(run.id);
+            clearPendingApprovalsForChat(sourceSocketChatId);
+            clearPendingQuestionsForRun(run.id, true);
+        }
+    })();
+}
 async function startChatAgentRun(session, userId, request, model, language, sourceSocketChatId) {
     const userSettings = await getUserSettings(userId);
     const workspace = getWorkspaceConfigForRoot(request.workspaceRoot, userSettings.remoteWorkspace);
@@ -1424,135 +1646,247 @@ async function startChatAgentRun(session, userId, request, model, language, sour
         text: agentPrompt,
     };
     await repositories_1.agentSessionRepository.upsertPart(initialUserPart);
-    const runner = new sshAgentRunner_1.SshAgentRunner(llamaClient, repositories_1.agentSessionRepository, repositories_1.agentRunTaskRepository, {
-        sessionId: agentSession.id,
-        chatId: session.id,
-        agentRunId: run.id,
+    spawnAndRunSshAgentRunner({
+        session,
+        run,
+        agentSession,
         userId,
-        sandboxId: session.sandboxId,
-        agent: 'ssh-agent',
         workspace,
-        agentPrompt,
-        modelID: agentModel,
-        providerID: 'llama',
-        cwd: request.workspaceRoot,
-        root: request.workspaceRoot,
         language,
+        sourceSocketChatId,
+        agentModel,
+        agentPrompt,
+        workspaceRoot: request.workspaceRoot,
         contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
         reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
         autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
-    }, {
-        onPartsUpdated: (steps, finalAnswer) => {
-            run.steps = steps;
-            // Allow null to clear the bubble — intermediate narration lives in
-            // the trace as a `thought` step, not the chat bubble.
-            run.finalAnswer = finalAnswer;
-            run.updatedAt = new Date().toISOString();
-            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            scheduleChatSave(session);
-        },
-        onStep: () => {
-            // onPartsUpdated already emits the full state. Step events here are
-            // useful for the UI's per-step animation but we keep them silent for
-            // now since the legacy ChatInterface listens to agent-run-updated.
-        },
-        onAssistantToken: () => {
-            // No-op: streamed tokens are persisted as a TextPart at the end of
-            // each iteration. The next emitProjection() decides whether they
-            // belong in the trace (thought step) or the chat bubble (final
-            // answer). Streaming directly into run.finalAnswer would poison the
-            // bubble with intermediate narration that we then have to clear.
-        },
-        onTimings: (timings) => {
-            io.to(sourceSocketChatId).emit('timings', timings);
-        },
-        onToolApprovalRequest: async (approvalRequest) => {
-            const latestSettings = await getUserSettings(userId);
-            if (latestSettings.remoteWorkspace.toolApprovals?.[approvalRequest.toolName] === 'auto-approve') {
-                return { approved: true, reason: 'approved' };
-            }
-            return await new Promise((resolve) => {
-                pendingApprovals.set(approvalRequest.approvalId, {
-                    chatId: sourceSocketChatId,
-                    request: approvalRequest,
-                    resolve,
-                });
-                io.to(sourceSocketChatId).emit('tool-approval-required', { ...approvalRequest, chatId: sourceSocketChatId });
-            });
-        },
-        onTasksUpdated: (chatId, agentRunId, tasks) => {
-            io.to(sourceSocketChatId).emit('agent-tasks-updated', { chatId, agentRunId, tasks });
-        },
-        onWorkspaceChanged: (hint) => {
-            io.to(userId).emit('remote-workspace-changed', hint);
-        },
-        onAskUserQuestion: async (request) => {
-            return await new Promise((resolve) => {
-                const payload = {
-                    chatId: sourceSocketChatId,
-                    agentRunId: run.id,
-                    questionId: request.questionId,
-                    question: request.question,
-                    options: request.options ?? [],
-                    multiple: Boolean(request.multiple),
-                    allowCustomAnswer: Boolean(request.allowCustomAnswer),
-                    timeoutMs: request.timeoutMs,
-                };
-                pendingQuestions.set(request.questionId, { payload, resolve });
-                io.to(sourceSocketChatId).emit('agent-question-required', payload);
-                if (request.timeoutMs && request.timeoutMs > 0) {
-                    setTimeout(() => {
-                        if (pendingQuestions.has(request.questionId)) {
-                            pendingQuestions.delete(request.questionId);
-                            resolve({ answer: '', answered: false });
-                            io.to(sourceSocketChatId).emit('agent-question-resolved', {
-                                chatId: sourceSocketChatId,
-                                agentRunId: run.id,
-                                questionId: request.questionId,
-                            });
-                        }
-                    }, request.timeoutMs);
-                }
-            });
-        },
-        onComplete: (finalAnswer) => {
-            // The aggregated answer from the projection is the source of truth.
-            // Fall back to whatever onPartsUpdated set if the runner passes null.
-            run.finalAnswer = finalAnswer ?? run.finalAnswer ?? null;
-            run.status = run.status === 'cancelled' ? 'cancelled' : 'completed';
-            run.updatedAt = new Date().toISOString();
-            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            void flushScheduledChatSave(session).catch(console.error);
-        },
-        onError: (error) => {
-            if (run.status !== 'cancelled') {
-                run.status = 'failed';
-                run.error = error;
-            }
-            run.updatedAt = new Date().toISOString();
-            io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(run));
-            void flushScheduledChatSave(session).catch(console.error);
-        },
     });
-    runningAgentRuns.set(run.id, {
-        kind: 'ssh-v2',
-        agent: runner,
-        session,
-        run,
-        sourceSocketChatId,
-        sessionId: agentSession.id,
-    });
-    void (async () => {
-        try {
-            await runner.run();
-        }
-        finally {
-            runningAgentRuns.delete(run.id);
-            clearPendingApprovalsForChat(sourceSocketChatId);
-            clearPendingQuestionsForRun(run.id, true);
-        }
-    })();
     return run.id;
+}
+// Resume a previously stopped (cancelled / failed) SSH agent run. The
+// agent_session row + every persisted message and part is reused; only any
+// dangling pending/running ToolParts are flipped to `error` so the LLM
+// doesn't see ghost states. A `<system-reminder>` user message is appended
+// announcing the resume so the model orients itself before the next turn.
+async function resumeAgentRun(runId, userId, sourceSocketChatId) {
+    if (runningAgentRuns.has(runId)) {
+        return { ok: false, reason: 'Run is already active.' };
+    }
+    let foundSession;
+    let foundRun;
+    for (const session of chatSessions.values()) {
+        if (session.userId !== userId)
+            continue;
+        const run = session.agentRuns.find((r) => r.id === runId);
+        if (run) {
+            foundSession = session;
+            foundRun = run;
+            break;
+        }
+    }
+    if (!foundSession || !foundRun) {
+        return { ok: false, reason: 'Run not found.' };
+    }
+    if (foundRun.status === 'completed') {
+        return { ok: false, reason: 'Run is already completed.' };
+    }
+    if (foundRun.status === 'running') {
+        return { ok: false, reason: 'Run is already running.' };
+    }
+    const userSettings = await getUserSettings(userId);
+    const workspace = getWorkspaceConfigForRoot(foundRun.workspaceRoot, userSettings.remoteWorkspace);
+    if (!workspace?.ssh?.enabled) {
+        return { ok: false, reason: 'Remote workspace is no longer configured.' };
+    }
+    const agentSession = await repositories_1.agentSessionRepository.findSessionByAgentRunId(runId);
+    if (!agentSession) {
+        return { ok: false, reason: 'No persisted session found for this run.' };
+    }
+    // Sanitize dangling tool parts left behind when the previous run was
+    // killed mid-flight. Pending/running parts confuse the next LLM turn
+    // because the prompt builder renders them as "[Tool still running]" /
+    // "[Tool pending]" forever.
+    const messagesWithParts = await repositories_1.agentSessionRepository.listMessagesWithParts(agentSession.id);
+    for (const msg of messagesWithParts) {
+        for (const part of msg.parts) {
+            if (!(0, message_1.isToolPart)(part))
+                continue;
+            if (part.state.status !== 'pending' && part.state.status !== 'running')
+                continue;
+            const startedAt = part.state.status === 'running' && part.state.time?.start
+                ? part.state.time.start
+                : Date.now();
+            const repaired = {
+                ...part,
+                state: {
+                    status: 'error',
+                    input: part.state.input,
+                    error: 'Run was interrupted before this tool finished. Resumed.',
+                    time: { start: startedAt, end: Date.now() },
+                },
+            };
+            await repositories_1.agentSessionRepository.upsertPart(repaired);
+        }
+    }
+    // Append a synthetic user message so the next iteration's prompt opens
+    // with a clear cue that the run is being resumed.
+    const resumeMessageId = ids_1.MessageID.ascending();
+    await repositories_1.agentSessionRepository.upsertMessage({
+        id: resumeMessageId,
+        sessionID: agentSession.id,
+        role: 'user',
+        time: { created: Date.now() },
+        agent: 'ssh-agent',
+        model: { providerID: 'llama', modelID: foundRun.model || userSettings.remoteWorkspace.agentModel || '' },
+    });
+    await repositories_1.agentSessionRepository.upsertPart({
+        id: ids_1.PartID.ascending(),
+        sessionID: agentSession.id,
+        messageID: resumeMessageId,
+        type: 'text',
+        text: '<system-reminder>\nThis run is being resumed after an interruption. ' +
+            'Inspect the trace above to see what was already done, then continue from where you left off — emit the next tool call needed to make progress, ' +
+            'or call `transition_to_compose_mode` if every Success Criterion is already met.\n</system-reminder>',
+    });
+    // Flip run state and surface the resumed status to the UI.
+    foundRun.status = 'running';
+    foundRun.error = undefined;
+    foundRun.updatedAt = new Date().toISOString();
+    io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(foundRun));
+    scheduleChatSave(foundSession);
+    spawnAndRunSshAgentRunner({
+        session: foundSession,
+        run: foundRun,
+        agentSession,
+        userId,
+        workspace,
+        sourceSocketChatId,
+        agentModel: foundRun.model || userSettings.remoteWorkspace.agentModel || '',
+        agentPrompt: foundRun.prompt,
+        workspaceRoot: foundRun.workspaceRoot,
+        contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+        reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+        autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
+    });
+    return { ok: true };
+}
+// Rewind a v2 SSH agent run back to the state immediately before a specific
+// trace step, then respawn the runner so the loop replays from that point.
+// `messageId` is the v2 `agent_session_messages` id that produced the step
+// the user clicked (carried in AgentStep.sourceMessageID). The target message
+// + every later message + their parts are deleted; the run's finalAnswer is
+// cleared and status is flipped back to 'running' before the new runner spins
+// up. Workspace files are NOT reverted — the model will see the workspace as
+// it currently is, which the UI surfaces as a warning before confirmation.
+async function rollbackAgentRun(runId, userId, sourceSocketChatId, messageId) {
+    if (runningAgentRuns.has(runId)) {
+        return { ok: false, reason: 'Stop the run before rewinding it.' };
+    }
+    let foundSession;
+    let foundRun;
+    for (const session of chatSessions.values()) {
+        if (session.userId !== userId)
+            continue;
+        const run = session.agentRuns.find((r) => r.id === runId);
+        if (run) {
+            foundSession = session;
+            foundRun = run;
+            break;
+        }
+    }
+    if (!foundSession || !foundRun) {
+        return { ok: false, reason: 'Run not found.' };
+    }
+    const userSettings = await getUserSettings(userId);
+    const workspace = getWorkspaceConfigForRoot(foundRun.workspaceRoot, userSettings.remoteWorkspace);
+    if (!workspace?.ssh?.enabled) {
+        return { ok: false, reason: 'Remote workspace is no longer configured.' };
+    }
+    const agentSession = await repositories_1.agentSessionRepository.findSessionByAgentRunId(runId);
+    if (!agentSession) {
+        return { ok: false, reason: 'No persisted session found for this run.' };
+    }
+    // Pre-check: refuse to rewind if the target is the first message in the
+    // session — leaving an empty session would break the next iteration's
+    // prompt build, which expects at least one user message.
+    const beforeTruncate = await repositories_1.agentSessionRepository.listMessagesWithParts(agentSession.id);
+    if (beforeTruncate.length === 0 || beforeTruncate[0].info.id === messageId) {
+        return { ok: false, reason: 'Cannot rewind past the initial prompt.' };
+    }
+    const removed = await repositories_1.agentSessionRepository.truncateMessagesFrom(agentSession.id, messageId);
+    if (removed === 0) {
+        return { ok: false, reason: 'Target step not found in this run.' };
+    }
+    const remaining = await repositories_1.agentSessionRepository.listMessagesWithParts(agentSession.id);
+    // Stale tool parts shouldn't exist after truncation (we deleted their
+    // owning messages), but be defensive — same shape as the resume path.
+    for (const msg of remaining) {
+        for (const part of msg.parts) {
+            if (!(0, message_1.isToolPart)(part))
+                continue;
+            if (part.state.status !== 'pending' && part.state.status !== 'running')
+                continue;
+            const startedAt = part.state.status === 'running' && part.state.time?.start
+                ? part.state.time.start
+                : Date.now();
+            const repaired = {
+                ...part,
+                state: {
+                    status: 'error',
+                    input: part.state.input,
+                    error: 'Run was interrupted before this tool finished.',
+                    time: { start: startedAt, end: Date.now() },
+                },
+            };
+            await repositories_1.agentSessionRepository.upsertPart(repaired);
+        }
+    }
+    // Append a system reminder so the model knows it's resuming from a rewound
+    // history (without it the next iteration may try to recall results from the
+    // discarded turns).
+    const rewindMessageId = ids_1.MessageID.ascending();
+    await repositories_1.agentSessionRepository.upsertMessage({
+        id: rewindMessageId,
+        sessionID: agentSession.id,
+        role: 'user',
+        time: { created: Date.now() },
+        agent: 'ssh-agent',
+        model: { providerID: 'llama', modelID: foundRun.model || userSettings.remoteWorkspace.agentModel || '' },
+    });
+    await repositories_1.agentSessionRepository.upsertPart({
+        id: ids_1.PartID.ascending(),
+        sessionID: agentSession.id,
+        messageID: rewindMessageId,
+        type: 'text',
+        text: '<system-reminder>\nThe trace was rewound by the user. Anything that came after this point in the previous run was discarded. ' +
+            'Re-evaluate the situation from the surviving history (the workspace files reflect their CURRENT state, not the state at this step) and emit the next tool call. ' +
+            'Re-read files before acting on them if you need to verify their contents.\n</system-reminder>',
+    });
+    // Re-project the truncated history immediately so the UI snaps to the
+    // rewound trace without waiting for the new runner's first emit.
+    const projectedAfter = await repositories_1.agentSessionRepository.listMessagesWithParts(agentSession.id);
+    foundRun.steps = (0, partProjection_1.projectPartsToSteps)(projectedAfter, { treatLastAssistantAsFinal: true });
+    foundRun.finalAnswer = (0, partProjection_1.findFinalAnswer)(projectedAfter);
+    foundRun.status = 'running';
+    foundRun.error = undefined;
+    foundRun.updatedAt = new Date().toISOString();
+    io.to(sourceSocketChatId).emit('agent-run-updated', serializeAgentRun(foundRun));
+    scheduleChatSave(foundSession);
+    spawnAndRunSshAgentRunner({
+        session: foundSession,
+        run: foundRun,
+        agentSession,
+        userId,
+        workspace,
+        sourceSocketChatId,
+        agentModel: foundRun.model || userSettings.remoteWorkspace.agentModel || '',
+        agentPrompt: foundRun.prompt,
+        workspaceRoot: foundRun.workspaceRoot,
+        contextWindowTokens: userSettings.remoteWorkspace.contextWindowTokens,
+        reservedOutputTokens: userSettings.remoteWorkspace.reservedOutputTokens,
+        autoCompactThreshold: userSettings.remoteWorkspace.autoCompactThreshold,
+    });
+    return { ok: true };
 }
 // Settings endpoint (UI settings only - server/searxng config comes from environment variables)
 app.get('/api/settings', auth_1.protect, async (req, res) => {
@@ -1564,6 +1898,8 @@ app.get('/api/settings', auth_1.protect, async (req, res) => {
             selectedPersonality: userSettings.ui.selectedPersonality,
             selectedModel: userSettings.ui.selectedModel,
             defaultToolPreferences: normalizeToolPreferences(userSettings.ui.defaultToolPreferences, userSettings.ui.defaultToolPreferences),
+            voicePreset: userSettings.ui.voicePreset ?? DEFAULT_TTS_VOICE,
+            voiceInstruction: userSettings.ui.voiceInstruction ?? '',
         },
         remoteWorkspace: serializeRemoteWorkspaceSettings(userSettings.remoteWorkspace),
     });
@@ -2221,6 +2557,103 @@ app.post('/api/sandbox/:sandboxId/upload', auth_1.protect, upload.single('file')
         res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
     }
 });
+// --- Text-to-speech (voice playback) endpoints ---
+// List the voices available on the TTS server (built-in presets plus any WAV
+// files in the server's --ttsdir). Used to populate the voice picker in settings.
+app.get('/api/tts/voices', auth_1.protect, async (_req, res) => {
+    try {
+        const listResponse = await fetch(`${TTS_BASE_URL}/api/extra/speakers_list`, {
+            dispatcher: slowMediaDispatcher,
+        });
+        if (!listResponse.ok) {
+            const detail = await listResponse.text().catch(() => '');
+            console.error('TTS speakers_list error:', listResponse.status, detail);
+            return res.status(502).json({ error: 'Could not load voices' });
+        }
+        const voices = (await listResponse.json());
+        res.json({ voices: Array.isArray(voices) ? voices : [] });
+    }
+    catch (error) {
+        console.error('TTS voices fetch failed:', error);
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
+// Summarize a reply into a spoken script and synthesize it to a WAV via the TTS server
+app.post('/api/tts/speak', auth_1.protect, async (req, res) => {
+    const userId = req.user.id;
+    const { text, model, userPrompt } = req.body;
+    if (!text || !text.trim()) {
+        return res.status(400).json({ error: 'No text provided' });
+    }
+    try {
+        const userSettings = await getUserSettings(userId);
+        const personality = await getSelectedPersonality(userId, userSettings.ui);
+        const script = await generateTtsScript(text, personality, model, userPrompt);
+        const voice = userSettings.ui.voicePreset?.trim() || DEFAULT_TTS_VOICE;
+        const instruction = userSettings.ui.voiceInstruction?.trim();
+        const ttsBody = { input: script, voice };
+        // instruction is only meaningful for CustomVoice/VoiceDesign presets; the
+        // server ignores it for the others, so it's safe to always include when set.
+        if (instruction)
+            ttsBody.instruction = instruction;
+        const ttsResponse = await fetch(`${TTS_BASE_URL}/api/extra/tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ttsBody),
+            dispatcher: slowMediaDispatcher,
+        });
+        if (!ttsResponse.ok) {
+            const detail = await ttsResponse.text().catch(() => '');
+            console.error('TTS server error:', ttsResponse.status, detail);
+            return res.status(502).json({ error: 'Voice synthesis failed' });
+        }
+        const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
+        res.setHeader('Content-Type', 'audio/wav');
+        // Expose the spoken script for clients that want to display/caption it
+        res.setHeader('X-Tts-Script', encodeURIComponent(script));
+        res.setHeader('Access-Control-Expose-Headers', 'X-Tts-Script');
+        res.send(audioBuffer);
+    }
+    catch (error) {
+        console.error('TTS speak failed:', error);
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
+// --- Speech-to-text (voice prompt) endpoint ---
+// Transcribe a recorded audio clip to text via the KoboldCpp Whisper endpoint
+app.post('/api/transcribe', auth_1.protect, audioUpload.single('audio'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: 'No audio provided' });
+    }
+    try {
+        // The frontend records a 16-bit 16kHz mono WAV (see WavRecorder), exactly
+        // what /api/extra/transcribe expects. Forward it base64-encoded.
+        // langcode "auto" detects the spoken language and transcribes IN it, instead
+        // of forcing English output for non-English speech.
+        const whisperResponse = await fetch(`${WHISPER_BASE_URL}/api/extra/transcribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                audio_data: req.file.buffer.toString('base64'),
+                langcode: 'auto',
+                prompt: '',
+                suppress_non_speech: false,
+            }),
+            dispatcher: slowMediaDispatcher,
+        });
+        if (!whisperResponse.ok) {
+            const detail = await whisperResponse.text().catch(() => '');
+            console.error('Whisper server error:', whisperResponse.status, detail);
+            return res.status(502).json({ error: 'Transcription failed' });
+        }
+        const data = (await whisperResponse.json());
+        res.json({ text: (data.text || '').trim() });
+    }
+    catch (error) {
+        console.error('Transcription failed:', error);
+        res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
+    }
+});
 // WebSocket handling for real-time agent updates
 io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
@@ -2251,12 +2684,13 @@ io.on('connection', (socket) => {
         }
         socket.join(chatId);
         console.log(`Socket ${socket.id} joined chat ${chatId}`);
-        // Check if there's an active agent or incomplete agent state
+        // Only emit live agent-state when there's actually a live agent in this
+        // process. Persisted `isComplete: false` alone is NOT a signal — after a
+        // server restart the runner is gone but the flag may still be stale.
+        // Emitting here in that case made the UI think the agent was still
+        // running and froze stop/edit/retry.
         const hasActiveAgent = session.currentAgent !== undefined;
-        const hasIncompleteState = session.agentState && !session.agentState.isComplete && (session.agentState.steps?.length ?? 0) > 0;
-        console.log(`Join-chat for ${chatId}: hasActiveAgent=${hasActiveAgent}, hasIncompleteState=${hasIncompleteState}, agentState=${JSON.stringify(session.agentState)}`);
-        // If there's an active agent or incomplete state, emit the current state so the client can restore streaming state
-        if (hasActiveAgent || hasIncompleteState) {
+        if (hasActiveAgent) {
             const stateToEmit = {
                 steps: session.agentState?.steps || [],
                 isComplete: session.agentState?.isComplete || false,
@@ -2265,12 +2699,10 @@ io.on('connection', (socket) => {
                 partialFinalAnswer: session.agentState?.partialFinalAnswer || null,
             };
             socket.emit('agent-state', stateToEmit);
-            console.log(`Emitting agent state to reconnecting client for chat ${chatId}:`, stateToEmit);
         }
         const pendingApproval = getPendingApprovalPayloadForChat(chatId);
         if (pendingApproval) {
             socket.emit('tool-approval-required', pendingApproval);
-            console.log(`Re-emitting pending approval ${pendingApproval.approvalId} to socket ${socket.id} for chat ${chatId}`);
         }
         // Re-emit any pending agent question for this chat so the dialog survives
         // a page reload or temporary disconnect. The backend kept the resolver
@@ -2279,8 +2711,34 @@ io.on('connection', (socket) => {
             if (pending.payload.chatId !== chatId)
                 continue;
             socket.emit('agent-question-required', pending.payload);
-            console.log(`Re-emitting pending question ${pending.payload.questionId} to socket ${socket.id} for chat ${chatId}`);
         }
+        // Re-project steps from the persisted v2 messages for any run that has
+        // a v2 session. This refreshes runs created before sourceMessageID was
+        // added so the rewind affordance lights up after a page reload, instead
+        // of waiting for the next runner emit (which never comes for finished
+        // runs).
+        void (async () => {
+            let mutated = false;
+            for (const run of session.agentRuns) {
+                try {
+                    const v2Session = await repositories_1.agentSessionRepository.findSessionByAgentRunId(run.id);
+                    if (!v2Session)
+                        continue;
+                    const messages = await repositories_1.agentSessionRepository.listMessagesWithParts(v2Session.id);
+                    if (messages.length === 0)
+                        continue;
+                    run.steps = (0, partProjection_1.projectPartsToSteps)(messages, { treatLastAssistantAsFinal: true });
+                    run.finalAnswer = (0, partProjection_1.findFinalAnswer)(messages) ?? run.finalAnswer ?? null;
+                    mutated = true;
+                }
+                catch (error) {
+                    console.error(`Failed to re-project steps for agent run ${run.id}:`, error);
+                }
+            }
+            if (mutated) {
+                socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
+            }
+        })();
         socket.emit('agent-runs', session.agentRuns.map(serializeAgentRun));
         void (async () => {
             for (const run of session.agentRuns) {
@@ -2372,11 +2830,9 @@ io.on('connection', (socket) => {
                 io.to(chatId).emit('thought-token', token);
             },
             onDebugInfo: (rawContent, parsed) => {
-                console.log('EMITTING DEBUG INFO:', { rawContent: rawContent.substring(0, 100), parsed });
                 io.to(chatId).emit('debug-info', { rawContent, parsed });
             },
             onTimings: (timings) => {
-                console.log('EMITTING TIMINGS:', timings);
                 io.to(chatId).emit('timings', timings);
             },
             onError: (error) => {
@@ -2486,8 +2942,9 @@ io.on('connection', (socket) => {
                     }
                 }
             }
-            // Add assistant message (final answer)
-            if (result.finalAnswer) {
+            // Add assistant message (final answer) - skip if SSH agent was spawned for this chat
+            // (the SSH agent's onComplete callback emits it instead)
+            if (result.finalAnswer && !session.agentRuns?.some(r => r.status === 'running' || r.status === 'completed')) {
                 session.messages.push({
                     id: crypto_1.default.randomUUID(),
                     role: 'assistant',
@@ -2505,8 +2962,9 @@ io.on('connection', (socket) => {
             session.updatedAt = new Date().toISOString();
             saveChats();
             emitChatUpdated(session);
+            const finalAnswerForUI = result.finalAnswer || session.agentRuns?.find(r => r.status === 'completed')?.finalAnswer || null;
             io.to(chatId).emit('agent-complete', {
-                finalAnswer: result.finalAnswer,
+                finalAnswer: finalAnswerForUI,
             });
         }
         catch (error) {
@@ -2600,6 +3058,63 @@ io.on('connection', (socket) => {
             console.log(`No active agent found for chat ${chatId} or unauthorized`);
         }
     });
+    socket.on('resume-agent-run', async (data) => {
+        if (!currentUserId) {
+            socket.emit('error', { message: 'Not authenticated' });
+            return;
+        }
+        const chatId = String(data?.chatId || '').trim();
+        const runId = String(data?.runId || '').trim();
+        if (!chatId || !runId) {
+            socket.emit('error', { message: 'chatId and runId are required' });
+            return;
+        }
+        const session = chatSessions.get(chatId);
+        if (!session || session.userId !== currentUserId) {
+            socket.emit('error', { message: 'Chat not found' });
+            return;
+        }
+        try {
+            const result = await resumeAgentRun(runId, currentUserId, chatId);
+            if (!result.ok) {
+                socket.emit('error', { message: `Cannot resume agent run: ${result.reason}` });
+            }
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[resume-agent-run] failed for run ${runId}:`, error);
+            socket.emit('error', { message: `Resume failed: ${message}` });
+        }
+    });
+    socket.on('rollback-agent-run', async (data) => {
+        if (!currentUserId) {
+            socket.emit('error', { message: 'Not authenticated' });
+            return;
+        }
+        const chatId = String(data?.chatId || '').trim();
+        const runId = String(data?.runId || '').trim();
+        const messageId = String(data?.messageId || '').trim();
+        if (!chatId || !runId || !messageId) {
+            socket.emit('error', { message: 'chatId, runId, and messageId are required' });
+            return;
+        }
+        const session = chatSessions.get(chatId);
+        if (!session || session.userId !== currentUserId) {
+            socket.emit('error', { message: 'Chat not found' });
+            return;
+        }
+        try {
+            const result = await rollbackAgentRun(runId, currentUserId, chatId, messageId);
+            if (!result.ok) {
+                socket.emit('error', { message: `Cannot rewind agent run: ${result.reason}` });
+            }
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[rollback-agent-run] failed for run ${runId}:`, error);
+            socket.emit('error', { message: `Rewind failed: ${message}` });
+        }
+    });
     socket.on('agent-user-message', (data) => {
         if (!currentUserId) {
             socket.emit('error', { message: 'Not authenticated' });
@@ -2689,6 +3204,39 @@ app.get('/api/agent-attachments/:filename', (req, res) => {
             return res.status(404).json({ error: 'Not found' });
         res.sendFile(fullPath);
     });
+});
+// Image proxy. Browser-tool observations may contain ![](url) images pointing
+// at arbitrary untrusted scraped hosts; rendering them directly would make the
+// user's browser fetch attacker-chosen URLs (IP/User-Agent leak, tracking
+// pixels). We fetch server-side with SSRF guards (see services/imageProxy) and
+// relay only validated image bytes. Auth via header or ?token= so <img> works,
+// same as agent-attachments.
+app.get('/api/image-proxy', async (req, res) => {
+    const headerToken = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+    const queryToken = typeof req.query.token === 'string' ? req.query.token : undefined;
+    const token = headerToken || queryToken;
+    if (!token) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    try {
+        jsonwebtoken_1.default.verify(token, JWT_SECRET);
+    }
+    catch {
+        return res.status(401).json({ error: 'Invalid token' });
+    }
+    const target = typeof req.query.url === 'string' ? req.query.url : '';
+    if (!target) {
+        return res.status(400).json({ error: 'Missing url' });
+    }
+    const result = await (0, imageProxy_1.fetchSafeImage)(target);
+    if (!result.ok || !result.body) {
+        return res.status(result.status).json({ error: result.error || 'Failed to fetch image' });
+    }
+    res.setHeader('Content-Type', result.contentType || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.setHeader('Content-Security-Policy', "default-src 'none'");
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    return res.end(result.body);
 });
 // Get available models
 app.get('/api/models', async (req, res) => {

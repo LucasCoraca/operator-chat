@@ -13,6 +13,7 @@ import { MemoryManagerModal } from './components/MemoryManagerModal';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { Login } from './components/Login';
 import * as authService from './services/auth';
+import { WavRecorder } from './utils/audioRecorder';
 import operatorLogo from './assets/logo.png';
 
 interface ChatPersonality {
@@ -30,6 +31,8 @@ interface Settings {
     selectedPersonality: string;
     selectedModel?: string;
     defaultToolPreferences: Record<string, ToolPreference>;
+    voicePreset?: string;
+    voiceInstruction?: string;
   };
   remoteWorkspace: {
     enabled: boolean;
@@ -209,6 +212,8 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
       showStats: false,
       selectedPersonality: 'professional',
       defaultToolPreferences: {},
+      voicePreset: 'kobo',
+      voiceInstruction: '',
     },
     remoteWorkspace: {
       enabled: false,
@@ -243,6 +248,14 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   const [landingInput, setLandingInput] = useState('');
   const [creatingChat, setCreatingChat] = useState(false);
   const [landingFile, setLandingFile] = useState<File | null>(null);
+  // Voice prompt on the landing page: record mic audio, transcribe via whisper,
+  // then auto-start the conversation with the transcribed text.
+  const [isLandingRecording, setIsLandingRecording] = useState(false);
+  const [isLandingTranscribing, setIsLandingTranscribing] = useState(false);
+  const landingRecorderRef = useRef<WavRecorder | null>(null);
+  // Release the mic if the landing page unmounts mid-recording. Must be declared
+  // here, above the `return <Login />` early return, so hook order stays stable.
+  useEffect(() => () => { landingRecorderRef.current?.cancel(); landingRecorderRef.current = null; }, []);
   const [landingTools, setLandingTools] = useState<Tool[]>([]);
   const [landingToolPreferences, setLandingToolPreferences] = useState<Record<string, ToolPreference>>({});
   const [showLandingToolPicker, setShowLandingToolPicker] = useState(false);
@@ -346,6 +359,8 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
             showStats: false,
             selectedPersonality: 'professional',
             defaultToolPreferences: {},
+            voicePreset: 'kobo',
+            voiceInstruction: '',
             ...data.ui,
           },
           remoteWorkspace: {
@@ -764,6 +779,64 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
   };
 
   const triggerLandingFileInput = () => landingFileInputRef.current?.click();
+
+  // Stop recording, transcribe the clip, then immediately start the conversation
+  // with the transcribed prompt (combined with anything already typed).
+  const stopLandingRecordingAndTranscribe = async () => {
+    const recorder = landingRecorderRef.current;
+    if (!recorder) return;
+    landingRecorderRef.current = null;
+    setIsLandingRecording(false);
+    setIsLandingTranscribing(true);
+    try {
+      const wav = await recorder.stop();
+      const body = new FormData();
+      body.append('audio', wav, 'recording.wav');
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: authService.getAuthHeader(),
+        body,
+      });
+      if (!res.ok) throw new Error('Transcription failed');
+      const data = await res.json();
+      const text = (data.text || '').trim();
+      if (text) {
+        const existing = landingInput.trim();
+        const message = existing ? `${existing} ${text}` : text;
+        if (creatingChat) {
+          // A chat is already being created; just keep the text in the box.
+          setLandingInput(message);
+        } else {
+          // Auto-start the conversation with the spoken prompt.
+          createChat(message);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to transcribe voice:', error);
+      alert(t('chat.transcribeFailed'));
+    } finally {
+      setIsLandingTranscribing(false);
+    }
+  };
+
+  const toggleLandingRecording = async () => {
+    if (isLandingTranscribing || creatingChat) return;
+    if (landingRecorderRef.current) {
+      await stopLandingRecordingAndTranscribe();
+      return;
+    }
+    try {
+      const recorder = new WavRecorder();
+      await recorder.start();
+      landingRecorderRef.current = recorder;
+      setIsLandingRecording(true);
+    } catch (error) {
+      console.error('Microphone unavailable:', error);
+      landingRecorderRef.current = null;
+      setIsLandingRecording(false);
+      alert(t('chat.micUnavailable'));
+    }
+  };
 
   const deleteChat = async (chatId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -1686,6 +1759,31 @@ function MainApp({ urlChatId, navigate }: { urlChatId: string | undefined; navig
                       <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                       </svg>
+                    </button>
+                    <button
+                      onClick={toggleLandingRecording}
+                      disabled={creatingChat || isLandingTranscribing}
+                      className={`flex size-9 items-center justify-center rounded-[var(--radius)] transition-colors disabled:opacity-50 ${
+                        isLandingRecording
+                          ? 'bg-rose/20 text-rose hover:bg-rose/30'
+                          : 'text-[var(--fg-2)] hover:bg-[rgba(255,255,255,.06)] hover:text-[var(--fg-0)]'
+                      }`}
+                      aria-label={isLandingRecording ? t('chat.stopRecording') : t('chat.recordVoice')}
+                      title={isLandingTranscribing ? t('chat.transcribing') : isLandingRecording ? t('chat.stopRecording') : t('chat.recordVoice')}
+                    >
+                      {isLandingTranscribing ? (
+                        <svg className="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                      ) : isLandingRecording ? (
+                        <span className="size-3 rounded-sm bg-rose animate-pulse" />
+                      ) : (
+                        <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 1.5a3 3 0 00-3 3v6a3 3 0 006 0v-6a3 3 0 00-3-3z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10.5a7 7 0 0014 0M12 17.5V21" />
+                        </svg>
+                      )}
                     </button>
                     <button
                       onClick={handleLandingSubmit}

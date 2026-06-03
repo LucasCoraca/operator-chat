@@ -106,7 +106,17 @@
     "reasoningEffort": "Sforzo di ragionamento",
     "reasoningEffortLow": "Basso",
     "reasoningEffortMedium": "Medio",
-    "reasoningEffortHigh": "Alto"
+    "reasoningEffortHigh": "Alto",
+    "play": "Riproduci",
+    "pause": "Pausa",
+    "resumeAudio": "Riprendi",
+    "generatingAudio": "Generazione…",
+    "audioFailed": "Impossibile generare l'audio. Il server vocale potrebbe non essere disponibile.",
+    "recordVoice": "Registra messaggio vocale",
+    "stopRecording": "Ferma e trascrivi",
+    "transcribing": "Trascrizione…",
+    "transcribeFailed": "Impossibile trascrivere l'audio. Il server vocale potrebbe non essere disponibile.",
+    "micUnavailable": "Microfono non disponibile. Controlla i permessi e che la pagina sia servita via HTTPS o localhost."
   },
   "settings": {
     "title": "Impostazioni",
@@ -136,7 +146,16 @@
     "mcpServer": "Server MCP (Prossimamente)",
     "mcpServerDescription": "L'integrazione del server MCP sarà disponibile in un futuro aggiornamento.",
     "language": "Lingua",
-    "languageDescription": "Seleziona la tua lingua preferita"
+    "languageDescription": "Seleziona la tua lingua preferita",
+    "voice": "Voce",
+    "voiceTagline": "Sintesi vocale",
+    "voiceDescription": "Riproduci le risposte ad alta voce. Scegli una voce e, facoltativamente, descrivi uno stile di pronuncia.",
+    "voicePreset": "Voce",
+    "voicePresetHint": "Scegli una voce preimpostata per le risposte parlate.",
+    "voiceInstruction": "Istruzione di stile",
+    "voiceInstructionHint": "Facoltativo. Descrivi come deve suonare la voce. Si applica solo alle voci personalizzabili.",
+    "voiceInstructionPlaceholder": "es. Donna cordiale con accento britannico",
+    "voicesLoadError": "Impossibile caricare le voci. Il server vocale potrebbe non essere disponibile."
   },
   "personality": {
     "managePersonalities": "Gestisci personalità",

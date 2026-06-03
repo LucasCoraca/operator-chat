@@ -106,7 +106,17 @@
     "reasoningEffort": "推論の努力",
     "reasoningEffortLow": "低",
     "reasoningEffortMedium": "中",
-    "reasoningEffortHigh": "高"
+    "reasoningEffortHigh": "高",
+    "play": "再生",
+    "pause": "一時停止",
+    "resumeAudio": "再開",
+    "generatingAudio": "生成中…",
+    "audioFailed": "音声を生成できませんでした。音声サーバーが利用できない可能性があります。",
+    "recordVoice": "音声入力を録音",
+    "stopRecording": "停止して文字起こし",
+    "transcribing": "文字起こし中…",
+    "transcribeFailed": "音声を文字起こしできませんでした。音声サーバーが利用できない可能性があります。",
+    "micUnavailable": "マイクを利用できません。権限と、ページがHTTPSまたはlocalhostで配信されているか確認してください。"
   },
   "settings": {
     "title": "設定",
@@ -136,7 +146,16 @@
     "mcpServer": "MCPサーバー（近日公開）",
     "mcpServerDescription": "MCPサーバー統合は将来のアップデートで利用可能になります。",
     "language": "言語",
-    "languageDescription": "お好みの言語を選択してください"
+    "languageDescription": "お好みの言語を選択してください",
+    "voice": "音声",
+    "voiceTagline": "テキスト読み上げ",
+    "voiceDescription": "返信を音声で再生します。音声を選び、任意で話し方のスタイルを記述できます。",
+    "voicePreset": "音声",
+    "voicePresetHint": "読み上げる返信用のプリセット音声を選択します。",
+    "voiceInstruction": "スタイル指示",
+    "voiceInstructionHint": "任意。音声の聞こえ方を記述します。カスタマイズ可能な音声にのみ適用されます。",
+    "voiceInstructionPlaceholder": "例: イギリス訛りのフレンドリーな女性",
+    "voicesLoadError": "音声を読み込めませんでした。音声サーバーが利用できない可能性があります。"
   },
   "personality": {
     "managePersonalities": "パーソナリティ管理",

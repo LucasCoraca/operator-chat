@@ -10,6 +10,7 @@ import rehypeKatex from 'rehype-katex';
 import type { PluggableList } from 'unified';
 import 'katex/dist/katex.min.css';
 import { getAuthHeader } from '../services/auth';
+import { WavRecorder } from '../utils/audioRecorder';
 import { generateUUID } from '../utils/uuid';
 import CodeBlock, { PreBlock } from './CodeBlock';
 import { UIStreamingContext } from './UIRenderer';
@@ -545,6 +546,15 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
   const [pendingRetryMessage, setPendingRetryMessage] = useState<{ content: string; idx: number } | null>(null);
   const [pendingRetryModel, setPendingRetryModel] = useState<string | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  // Text-to-speech playback: which message owns the audio + its current status
+  const [ttsMessageId, setTtsMessageId] = useState<string | null>(null);
+  const [ttsStatus, setTtsStatus] = useState<'idle' | 'loading' | 'playing' | 'paused'>('idle');
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsUrlRef = useRef<string | null>(null);
+  // Voice prompt: record mic audio, transcribe via whisper, drop text into the composer
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const recorderRef = useRef<WavRecorder | null>(null);
   const [highlightedMessage, setHighlightedMessage] = useState<number | null>(null);
   const [availableTools, setAvailableTools] = useState<Tool[]>([]);
   const [toolPreferences, setToolPreferences] = useState<Record<string, ToolPreference>>({});
@@ -1569,6 +1579,143 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
       console.error('Failed to copy:', error);
     }
   };
+
+  // Release the current audio element + blob URL so a new clip can be generated
+  const teardownTts = useCallback(() => {
+    const audio = ttsAudioRef.current;
+    if (audio) {
+      // Detach handlers first so the queued pause event can't clobber new state.
+      audio.onplay = null;
+      audio.onpause = null;
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.src = '';
+      ttsAudioRef.current = null;
+    }
+    if (ttsUrlRef.current) {
+      URL.revokeObjectURL(ttsUrlRef.current);
+      ttsUrlRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => teardownTts(), [teardownTts]);
+
+  // Play / pause spoken playback of an assistant reply. Generates the audio on
+  // first click (LLM summary -> TTS server), then toggles play/pause afterwards.
+  const toggleSpeak = useCallback(async (content: string, messageId: string, userPrompt?: string) => {
+    // Same message already loaded: just toggle play/pause.
+    if (ttsMessageId === messageId && ttsAudioRef.current) {
+      if (ttsStatus === 'playing') {
+        ttsAudioRef.current.pause();
+      } else if (ttsStatus === 'paused') {
+        void ttsAudioRef.current.play();
+      }
+      return;
+    }
+    if (ttsStatus === 'loading') return;
+
+    // Switching to a different message: drop any existing audio first.
+    teardownTts();
+    setTtsMessageId(messageId);
+    setTtsStatus('loading');
+
+    try {
+      const res = await fetch('/api/tts/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({ text: content, model: currentModel, userPrompt }),
+      });
+      if (!res.ok) throw new Error('Voice synthesis failed');
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      ttsUrlRef.current = url;
+
+      const audio = new Audio(url);
+      ttsAudioRef.current = audio;
+      audio.onplay = () => setTtsStatus('playing');
+      audio.onpause = () => {
+        // Distinguish a real pause from reaching the end (handled by onended).
+        if (!audio.ended) setTtsStatus('paused');
+      };
+      audio.onended = () => setTtsStatus('idle');
+      audio.onerror = () => {
+        setTtsStatus('idle');
+        setTtsMessageId(null);
+      };
+      await audio.play();
+    } catch (error) {
+      console.error('Failed to play voice:', error);
+      teardownTts();
+      setTtsStatus('idle');
+      setTtsMessageId(null);
+      // Surface the failure so a down/unreachable TTS server isn't silent.
+      alert(t('chat.audioFailed'));
+    }
+  }, [currentModel, t, teardownTts, ttsMessageId, ttsStatus]);
+
+  // Stop recording, transcribe the clip, and place the text in the composer.
+  const stopRecordingAndTranscribe = useCallback(async () => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    recorderRef.current = null;
+    setIsRecording(false);
+    setIsTranscribing(true);
+    try {
+      const wav = await recorder.stop();
+      const body = new FormData();
+      body.append('audio', wav, 'recording.wav');
+      const res = await fetch('/api/transcribe', {
+        method: 'POST',
+        headers: getAuthHeader(),
+        body,
+      });
+      if (!res.ok) throw new Error('Transcription failed');
+      const data = await res.json();
+      const text = (data.text || '').trim();
+      if (text) {
+        // Combine with anything already typed and send as a normal prompt.
+        const existing = input.trim();
+        const message = existing ? `${existing} ${text}` : text;
+        if (isProcessing) {
+          // Agent is busy: keep the text in the composer rather than dropping it.
+          setInput(message);
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        } else {
+          setInput('');
+          sendMessageContent(message);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to transcribe voice:', error);
+      alert(t('chat.transcribeFailed'));
+    } finally {
+      setIsTranscribing(false);
+    }
+  }, [input, isProcessing, sendMessageContent, t]);
+
+  const toggleRecording = useCallback(async () => {
+    if (isTranscribing) return;
+    if (recorderRef.current) {
+      await stopRecordingAndTranscribe();
+      return;
+    }
+    try {
+      const recorder = new WavRecorder();
+      await recorder.start();
+      recorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (error) {
+      console.error('Microphone unavailable:', error);
+      recorderRef.current = null;
+      setIsRecording(false);
+      alert(t('chat.micUnavailable'));
+    }
+  }, [isTranscribing, stopRecordingAndTranscribe, t]);
+
+  // Release the mic if the component unmounts mid-recording.
+  useEffect(() => () => { recorderRef.current?.cancel(); recorderRef.current = null; }, []);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -2887,6 +3034,41 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
               >
                 {copiedMessageId === msg.id ? t('common.copied') : t('common.copy')}
               </button>
+              {(() => {
+                const thisId = msg.id || `msg-${idx}`;
+                // The user question that prompted this reply, for summary context.
+                let askedPrompt = '';
+                for (let i = idx - 1; i >= 0; i--) {
+                  if (messages[i].role === 'user') { askedPrompt = messages[i].content; break; }
+                }
+                const active = ttsMessageId === thisId;
+                const status = active ? ttsStatus : 'idle';
+                const label =
+                  status === 'loading'
+                    ? t('chat.generatingAudio')
+                    : status === 'playing'
+                    ? t('chat.pause')
+                    : status === 'paused'
+                    ? t('chat.resumeAudio')
+                    : t('chat.play');
+                return (
+                  <button
+                    onClick={() => toggleSpeak(msg.content, thisId, askedPrompt)}
+                    disabled={status === 'loading'}
+                    title={label}
+                    aria-label={label}
+                    className="text-zinc-500 hover:text-zinc-300 text-xs flex items-center gap-1 disabled:cursor-wait"
+                  >
+                    {status === 'loading' && (
+                      <svg className="size-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                    )}
+                    <span>{label}</span>
+                  </button>
+                );
+              })()}
               <button
                 onClick={() => startEditing(idx, msg.content)}
                 className="text-zinc-500 hover:text-zinc-300 text-xs flex items-center gap-1"
@@ -2967,7 +3149,7 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
     ));
   }, [messages, agentRuns, currentAgentSteps, processingMessageIndex, expandedThoughts, expandedAgentRuns, streamingThoughtContent,
       streamingContent, currentStepType, editingMessageIndex, editContent, showRetryDropdown,
-      copiedMessageId, highlightedMessage, isProcessing, agentSteeringDrafts]);
+      copiedMessageId, highlightedMessage, isProcessing, agentSteeringDrafts, ttsMessageId, ttsStatus]);
 
   const isEmptyState = messages.length === 0 && !isProcessing;
 
@@ -3173,6 +3355,31 @@ function ChatInterface({ socket, chatId, sandboxId, models, currentModel, onMode
           <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
           </svg>
+        </button>
+        <button
+          onClick={toggleRecording}
+          disabled={isProcessing || isTranscribing}
+          className={`flex size-8 items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${
+            isRecording
+              ? 'bg-rose/20 text-rose hover:bg-rose/30'
+              : 'text-[var(--fg-3)] hover:bg-[rgba(255,255,255,.04)] hover:text-[var(--fg-1)]'
+          }`}
+          aria-label={isRecording ? t('chat.stopRecording') : t('chat.recordVoice')}
+          title={isTranscribing ? t('chat.transcribing') : isRecording ? t('chat.stopRecording') : t('chat.recordVoice')}
+        >
+          {isTranscribing ? (
+            <svg className="size-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          ) : isRecording ? (
+            <span className="size-3 rounded-sm bg-rose animate-pulse" />
+          ) : (
+            <svg className="size-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 1.5a3 3 0 00-3 3v6a3 3 0 006 0v-6a3 3 0 00-3-3z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 10.5a7 7 0 0014 0M12 17.5V21" />
+            </svg>
+          )}
         </button>
         {isProcessing || hasRunningAgentRun ? (
           <button
