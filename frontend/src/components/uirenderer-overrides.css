@@ -8,6 +8,36 @@
   border: none !important;
 }
 
+/* OpenUI's CodeBlock renders through react-syntax-highlighter with the
+ * vscDarkPlus theme, which hard-codes an inline #1e1e1e background on its <pre>
+ * (and a matching one on the inner <code>). That reads as a lighter, raised box
+ * floating over the darker chat reply. Match the code block background to the
+ * surrounding message/text area so it blends in like the cards above. The
+ * background lives in inline styles, so !important is required to override it.
+ * Use transparent (not a fixed color) so it inherits whatever surface the reply
+ * sits on — the render root appears over several backgrounds (#0a0a0c, the page
+ * base, sunk panels), and transparent matches the text area in every case. */
+.openui-render-root .openui-code-block-syntax-highlighter,
+.openui-render-root .openui-code-block-syntax-highlighter pre,
+.openui-render-root .openui-code-block-syntax-highlighter code,
+.openui-render-root .openui-code-block-syntax-highlighter code[class*="language-"] {
+  background: transparent !important;
+}
+
+/* Kill the inline-code styling that leaks onto the code block's inner <code>.
+ * The surrounding reply is `.prose`, whose `.prose code` rule gives inline code
+ * padding + a pill background + rounded corners. The reset `.prose pre code`
+ * only matches a <code> inside a <pre>, but OpenUI renders the block with
+ * PreTag="div", so the inner <code class="language-…"> is NOT inside a <pre> —
+ * it keeps the inline-code padding. On a multi-line `white-space: pre` inline
+ * box that left padding lands only on the FIRST line, shoving it right and
+ * drawing a little rounded background nub in the top-left corner. Zero it so
+ * every line aligns to the same left edge. */
+.openui-render-root .openui-code-block-syntax-highlighter code {
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
 /* ---------------------------------------------------------------------------
  * Mobile responsiveness.
  *

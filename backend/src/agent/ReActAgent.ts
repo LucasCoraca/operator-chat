@@ -1015,8 +1015,8 @@ This is REQUIRED for any factual claims, statistics, news, or information obtain
     // be repeated verbatim at the top and bottom of the compose prompt (primacy +
     // recency). Keep this as the single source of truth — edit here, not inline.
     const composeHardRules = `### Hard rules — read these first (the elements that break most often)
-1. **ONE value per argument slot — extra arguments are silently DROPPED and that text VANISHES from the page.** Every component takes a FIXED number of arguments (shown in its signature). NEVER split prose into several comma-separated strings — \`MarkDownRenderer("p1", "p2", "p3")\` is WRONG (the renderer logs \`"MarkDownRenderer takes 2 arg(s), got 3 (1 excess dropped)"\` and only the first paragraph survives). Put every paragraph into ONE string with \`\\n\\n\` between them: \`MarkDownRenderer("First.\\n\\nSecond.\\n\\nThird.")\` — or split into SEPARATE component variables listed in a parent \`Stack([...])\`.
-2. **Inside a \`\`\`ui fence, write ONLY valid openui-lang** — no markdown, prose, or JSX. Use ONLY the component names and signatures from the spec; never invent a component (there is NO \`Row\`, \`Column\`, \`Grid\`, or \`ImageGalleryImage\`) and never add extra arguments.
+1. **ONE value per argument slot — extra arguments are silently DROPPED and your content VANISHES from the page.** This applies to EVERY component: count your arguments against the signature and never pass more than it lists. The renderer logs e.g. \`"TextCallout takes 3 arg(s), got 4 (1 excess dropped)"\` and throws the extra away — so \`TextCallout(variant, title, description)\` takes EXACTLY 3, \`CardHeader(title, subtitle)\` takes 2, \`MarkDownRenderer(textMarkdown, variant?)\` takes 1–2. The most common slip is splitting prose into several comma-separated strings — \`MarkDownRenderer("p1", "p2", "p3")\` is WRONG (only the first paragraph survives); instead put every paragraph into ONE string with \`\\n\\n\` between them: \`MarkDownRenderer("First.\\n\\nSecond.\\n\\nThird.")\`, or split into SEPARATE component variables listed in a parent \`Stack([...])\`.
+2. **Inside a \`\`\`ui fence, write ONLY valid openui-lang** — no markdown, prose, or JSX. Use ONLY the component names and signatures from the spec; never invent a component (there is NO \`Row\`, \`Column\`, \`Grid\`, or \`ImageGalleryImage\`) and never add extra arguments. **Arguments are POSITIONAL — pass them by position only, NEVER by name.** \`name=value\` and \`name: value\` keyword syntax is NOT supported and silently breaks: \`Accordion(items=[a, b, c])\` is WRONG — the \`items=\` prefix makes the renderer see the array's elements as separate positional args (logging e.g. \`"Accordion takes 1 arg(s), got 8 (7 excess dropped)"\`) so the items are dropped and the section renders empty. Write the array directly: \`Accordion([a, b, c])\`. Same everywhere — \`Tabs([...])\`, \`Stack([...], "row")\`, \`Table([...])\`, never \`items=\`, \`columns=\`, \`direction=\`.
 3. **Markdown formatting** (\`**bold**\`, lists, \`#\` headings, links) renders ONLY inside \`MarkDownRenderer\`/\`TextContent\`. Every OTHER field is PLAIN TEXT — \`CardHeader\` title/subtitle, \`StepsItem\` titles, \`TextCallout\`, \`Tag\`, \`Button\` labels, \`Table\` column labels, \`Tabs\`/\`Accordion\` labels — so asterisks there show literally. To emphasize a short label use \`TextContent(text, "large-heavy")\`, not \`**\`.
 4. **Charts need one number per label.** In \`BarChart\`/\`LineChart\`/\`AreaChart(labels, series)\`, each \`Series\` \`values\` array length MUST equal \`labels\` length or bars/points go missing. For one value per category use a SINGLE series: \`BarChart(["EUA", "Irã", "Israel"], [Series("Perdas", [2.8, 1.45, 0.2])])\` — NOT one series per category. Use multiple series only to compare metrics across the SAME labels.
 5. **1D charts take plain NUMBERS, not objects.** \`PieChart\`/\`RadialChart\`/\`SingleStackedBarChart(labels, values)\` — e.g. \`PieChart(["Low", "Med", "High"], [4, 7, 2], "donut")\`. Aggregate list data into numbers with \`@Count(@Filter(...))\`.
@@ -1063,6 +1063,86 @@ b2 = TextCallout("info", "Less load", "Fewer hits reach your database or upstrea
 b3 = TextCallout("neutral", "Better scale", "The same hardware serves more concurrent users.")
 chart = BarChart(["No cache", "Cold cache", "Warm cache"], [latency])
 latency = Series("Latency (ms)", [240, 180, 12])
+\`\`\`
+
+### Match the layout to the content — compose like the kind of site that presents it
+Mirror how a real site for this topic would look, using only the real components:
+- **News** → match the intent, and always cite sources inline:
+  - *"Today's news", headlines, "what's happening", a general roundup* → build a news **FRONT PAGE**: a lead/top story (\`CardHeader\` + hero \`Image\` + a short \`MarkDownRenderer\` summary), then a \`Stack\` of \`Card\`s for the other top stories — each with its headline as \`TextContent(text, "large-heavy")\`, a source + time line, a one-line blurb, and a topic \`Tag\`. Group them into sections (World, Tech, Business, Sports…) with \`CardHeader\`s or \`Tabs\` when there are many. Several distinct stories, not one long article.
+  - *A specific story or topic* → build a single **ARTICLE PAGE**: one headline (\`CardHeader\`), a byline/source + date subtitle, a hero \`Image\`, the full story in \`MarkDownRenderer\` (with sub-headings), topic \`Tag\`s, and a few "Related" story \`Card\`s at the end.
+- **Weather** → mirror a weather app: the current temperature big (\`TextContent("23°C", "large-heavy")\`) with location + conditions, a \`Stack([...], "row")\` of day/hour \`Card\`s for the forecast, a \`LineChart\` of the temperature trend, and \`Tag\`s for conditions (sunny, rain).
+- **Finance / markets / crypto** → KPI \`Card\`s for price and % change (\`Tag\` "success"/"danger" for up/down), a \`LineChart\` of price history, and a \`Table\` of holdings or movers.
+- **Sports** → a scoreboard \`Card\` (team vs team, score as \`large-heavy\`), a \`Table\` of standings/fixtures, and \`Tag\`s for W/L/live.
+- **Product / shopping / "X vs Y"** → one \`Card\` per item with \`Image\`, price as \`large-heavy\`, pros as \`Tag\`s; a \`Table\` comparing specs side by side, or 2 columns / \`Tabs\` for a head-to-head.
+- **Recipe / how-to / tutorial** → \`Steps\` for the procedure, a \`Table\` or list of ingredients/materials, a hero \`Image\`, \`CodeBlock\` for code, \`Callout\` for tips/warnings, \`Tabs\` for variants or languages.
+- **Travel / itinerary** → day-by-day \`Steps\` or \`Card\`s, a \`Stack\` of \`Image\`s of the place, a \`Table\` of times/prices.
+- **Profile / company / bio** → \`CardHeader\` (name + role) with an \`Image\`, \`TagBlock\` for skills/tags, sectioned \`MarkDownRenderer\`, and key facts as KPI \`Card\`s.
+- **Definition / encyclopedia / explainer** → \`CardHeader\` title, \`MarkDownRenderer\` body, an illustrative \`Image\`/\`Video\`, and related terms as \`Tag\`s (like the caching example above).
+- **Data / analytics / dashboard** → a row of KPI \`Card\`s on top, then charts (\`BarChart\`/\`LineChart\`/\`PieChart\`), then a \`Table\` for detail; group alternate views in \`Tabs\`.
+Treat these as starting points, not rigid templates — adapt to the actual content, and always stay within the real component signatures.
+
+### Worked layout skeletons — copy the STRUCTURE, replace the content
+These show the shape; swap in real, researched content. Notice the "site chrome" (header row, banner, section tabs, footer) wrapped around the content, the wrapped card grids (\`Stack([...], "row", "m", "start", "start", true)\`), and the main+sidebar two-column.
+
+News front page:
+\`\`\`ui
+root = Stack([header, breaking, sections, mainCols, footer], "column", "m")
+header = Stack([brand, dateText], "row", "none", "center", "between")
+brand = TextContent("THE DAILY CHRONICLE", "large-heavy")
+dateText = TextContent("Wed, June 3, 2026 • 72°F NYC", "small")
+breaking = Callout("warning", "⚡ BREAKING", "One-line top headline goes here.")
+sections = Tabs([tWorld, tBiz])
+tWorld = TabItem("world", "World", [worldGrid])
+tBiz = TabItem("business", "Business", [bizGrid])
+worldGrid = Stack([wc1, wc2], "row", "m", "start", "start", true)
+wc1 = Card([CardHeader("Headline one", "Short deck"), TextContent("Two-line summary of the story.", "default"), wc1tags])
+wc1tags = Stack([Tag("Africa", null, "sm", "info"), Tag("4h ago", null, "sm", "neutral")], "row", "s", "center", "start")
+wc2 = Card([CardHeader("Headline two", "Short deck"), TextContent("Two-line summary of the story.", "default"), wc2tags])
+wc2tags = Stack([Tag("USA", null, "sm", "danger"), Tag("5h ago", null, "sm", "neutral")], "row", "s", "center", "start")
+bizGrid = Stack([bc1], "row", "m", "start", "start", true)
+bc1 = Card([CardHeader("Markets rally", "Indices hit records"), TextContent("Short market summary.", "default"), TextContent("35 min ago", "small")])
+mainCols = Stack([latest, sidebar], "row", "m", "start", "start", false)
+latest = Card([CardHeader("LATEST STORIES", ""), TextContent("Lead story summary paragraph.", "default")], "card")
+sidebar = Card([CardHeader("TRENDING NOW", ""), TextContent("1. Story\\n2. Story\\n3. Story", "default")], "card")
+footer = TextContent("© 2026 The Daily Chronicle. All rights reserved.", "small")
+\`\`\`
+
+Weather:
+\`\`\`ui
+root = Stack([wHeader, current, forecast, trend], "column", "m")
+wHeader = Stack([place, today], "row", "none", "center", "between")
+place = TextContent("New York City", "large-heavy")
+today = TextContent("Wed, June 3 • Updated 9:00 AM", "small")
+current = Card([Stack([nowTemp, nowMeta], "row", "m", "center", "start")], "card")
+nowTemp = TextContent("23°C", "large-heavy")
+nowMeta = Stack([TextContent("Sunny", "default"), Tag("Feels 25°C", null, "sm", "neutral"), Tag("Humidity 40%", null, "sm", "info")], "column", "s", "start", "start")
+forecast = Stack([d1, d2, d3, d4], "row", "m", "start", "start", true)
+d1 = Card([TextContent("Mon", "small-heavy"), TextContent("☀", "large"), TextContent("24° / 16°", "default")], "sunk", "column", "s", "center", "center")
+d2 = Card([TextContent("Tue", "small-heavy"), TextContent("⛅", "large"), TextContent("22° / 15°", "default")], "sunk", "column", "s", "center", "center")
+d3 = Card([TextContent("Wed", "small-heavy"), TextContent("🌧", "large"), TextContent("19° / 14°", "default")], "sunk", "column", "s", "center", "center")
+d4 = Card([TextContent("Thu", "small-heavy"), TextContent("☀", "large"), TextContent("25° / 17°", "default")], "sunk", "column", "s", "center", "center")
+trend = LineChart(["Mon", "Tue", "Wed", "Thu"], [tHigh], "natural", "Day", "°C")
+tHigh = Series("High", [24, 22, 19, 25])
+\`\`\`
+
+Data dashboard:
+\`\`\`ui
+root = Stack([dTitle, kpis, dCharts, dTable], "column", "m")
+dTitle = TextContent("Sales Dashboard — Q2 2026", "large-heavy")
+kpis = Stack([k1, k2, k3], "row", "m", "start", "start", true)
+k1 = Card([TextContent("Revenue", "small"), TextContent("$1.24M", "large-heavy"), Tag("+12%", null, "sm", "success")])
+k2 = Card([TextContent("Orders", "small"), TextContent("8,420", "large-heavy"), Tag("+5%", null, "sm", "success")])
+k3 = Card([TextContent("Churn", "small"), TextContent("2.1%", "large-heavy"), Tag("-0.3%", null, "sm", "danger")])
+dCharts = Tabs([cRev, cMix])
+cRev = TabItem("rev", "Revenue", [revChart])
+cMix = TabItem("mix", "By Region", [mixChart])
+revChart = LineChart(["Apr", "May", "Jun"], [revSeries], "natural", "Month", "$K")
+revSeries = Series("Revenue", [380, 410, 450])
+mixChart = PieChart(["NA", "EU", "APAC"], [52, 30, 18], "donut")
+dTable = Table([Col("Product", prods), Col("Units", units, "number"), Col("Revenue", rev, "number")])
+prods = ["Pro Plan", "Team Plan", "Enterprise"]
+units = [3200, 2800, 420]
+rev = [320000, 560000, 360000]
 \`\`\`
 
 ### Before you finish — re-check these (same rules as above; these break the render most often)
