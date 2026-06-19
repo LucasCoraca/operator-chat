@@ -184,6 +184,13 @@ services:
     volumes:
       - ./models:/models
       - ./llama_swap/config.yaml:/app/config.yaml:ro
+      # vLLM-backed models spawn the vllm/vllm-openai image as a sibling
+      # container via the host docker daemon. The :cuda image has no docker CLI,
+      # so bind the host's binary in too. Siblings join chatinterface-network and
+      # are reached by name (see llama_swap/config.yaml). Host IP access to
+      # llama-swap itself is preserved via the 9292:8080 port mapping above.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
     networks:
       - chatinterface-network
     environment:

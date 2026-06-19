@@ -681,6 +681,7 @@ Retry #${retryCount}: provide a plain final answer (normal assistant text), no t
             personalitySection = `\n\n## PERSONALITY: ${this.personality.name}\n${this.personality.systemPrompt}\n\n`;
         }
         // Build mode-specific sections (static per mode, doesn't change within a mode)
+        const langRule = this.getLanguageInstruction();
         const modeSection = this.currentMode === 'research_mode' ? `
 
 ## MODE
@@ -737,6 +738,8 @@ In your response, you can reference downloadable files like this:
 - "The converted file data.csv is ready for download"
 - "Check the Sandbox Files panel to download result.txt"
 `}
+
+${langRule}
 ` : '';
         const composeSection = this.currentMode === 'compose_reply_mode' ? `
 
@@ -889,6 +892,8 @@ rev = [320000, 560000, 360000]
 
 ### Before you finish — re-check these (same rules as above; these break the render most often)
 ${composeHardRules}
+
+${langRule}
 ` : '';
         return `Knowledge Cutoff: December 2023
 
